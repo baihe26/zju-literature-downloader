@@ -4,6 +4,25 @@ A Codex/Claude skill for legally downloading and reading academic PDFs through t
 
 中文简介：这是一个面向浙大图书馆/WebVPN 场景的文献下载与全文读取 skill。它使用用户自己已经登录的 Chrome 会话，在授权范围内保存 PDF 和 supporting information，并对文件做页数、PDF 签名和文本可读性验证。适合“网页里能打开 PDF，但命令行下载 403/401/登录页”的情况。
 
+中文快速使用教程：
+
+1. 先在自己的 Chrome 里打开浙大图书馆或 WebVPN，并用自己的账号登录。
+   - 常用入口：`https://libweb.zju.edu.cn/`
+   - WebVPN：`https://webvpn.zju.edu.cn/`
+   - 求是学术搜索 / Summon：`https://zju.summon.serialssolutions.com/`
+2. 确认这个 Chrome 里能正常访问目标文献页面，最好能手动打开一次 PDF 或“在线全文”。
+3. 在 Chrome 地址栏打开 `chrome://inspect/#remote-debugging`，勾选 `Allow remote debugging for this browser instance`。
+4. 告诉 Codex/Claude 你的文献清单，例如 DOI、题目或 PMID，并说明输出文件夹。
+5. agent 会通过你已经登录的 Chrome 会话检索、打开 PDF、保存主文和补充材料，并生成下载记录。
+6. 如果网页要求验证码、Cloudflare、人机验证、WebVPN 重新登录或二次认证，需要你本人在 Chrome 里完成；agent 不绕过这些验证。
+7. 推荐小批量使用：一次 5-10 篇比较稳，最多 15-20 篇，并保留 manifest 记录。不要用它批量扫关键词结果、整期杂志或大量连续下载。
+
+可以这样对 agent 说：
+
+```text
+请使用 zju-literature-downloader，通过我已经登录的浙大图书馆/WebVPN Chrome 会话，下载下面这些 DOI 的 PDF 和补充材料，并生成 manifest。
+```
+
 ## What It Solves
 
 - ZJU Library / WebVPN can open a paper, but direct `curl` or `Invoke-WebRequest` returns 403.
@@ -133,4 +152,3 @@ The workflow has been verified with:
 - Route: ZJU Summon `PDF` link -> ACS PDF page
 - Result: main PDF and ACS supporting information PDF
 - Verification: main PDF 17 pages, SI PDF 31 pages, both text-readable
-
