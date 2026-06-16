@@ -1,7 +1,19 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import sys
 from pathlib import Path
+
+
+def configure_utf8_stdio():
+    """Keep Chinese paths/text printable in Windows PowerShell and Claude Code terminals."""
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
 
 
 def extract_with_pdfplumber(pdf_path, max_pages):
@@ -31,6 +43,8 @@ def extract_with_pypdf(pdf_path, max_pages):
 
 
 def main():
+    configure_utf8_stdio()
+
     parser = argparse.ArgumentParser(description="Extract text from a downloaded PDF for verification or reading.")
     parser.add_argument("--pdf", required=True, help="Path to PDF")
     parser.add_argument("--out", help="Optional output .txt path")

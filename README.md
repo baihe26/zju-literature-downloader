@@ -16,6 +16,7 @@ A Codex/Claude skill for legally downloading and reading academic PDFs through t
 5. agent 会通过你已经登录的 Chrome 会话检索、打开 PDF、保存主文和补充材料，并生成下载记录。
 6. 如果网页要求验证码、Cloudflare、人机验证、WebVPN 重新登录或二次认证，需要你本人在 Chrome 里完成；agent 不绕过这些验证。
 7. 推荐小批量使用：一次 5-10 篇比较稳，最多 15-20 篇，并保留 manifest 记录。不要用它批量扫关键词结果、整期杂志或大量连续下载。
+8. 如果 Claude Code 没有自动识别这个 skill，把仓库安装到 `%USERPROFILE%\.claude\skills\zju-literature-downloader`，然后重启或刷新 Claude Code。
 
 可以这样对 agent 说：
 
@@ -65,10 +66,24 @@ Manual Codex installation:
 git clone https://github.com/baihe26/zju-literature-downloader.git "$env:USERPROFILE\.codex\skills\zju-literature-downloader"
 ```
 
-Manual Claude/Agents-style installation:
+Manual Claude Code installation:
+
+```powershell
+git clone https://github.com/baihe26/zju-literature-downloader.git "$env:USERPROFILE\.claude\skills\zju-literature-downloader"
+```
+
+Manual Agents-style installation:
 
 ```powershell
 git clone https://github.com/baihe26/zju-literature-downloader.git "$env:USERPROFILE\.agents\skills\zju-literature-downloader"
+```
+
+If the repository is already installed in `.codex\skills`, copy it into Claude's default skill directory:
+
+```powershell
+Copy-Item -Recurse -Force `
+  "$env:USERPROFILE\.codex\skills\zju-literature-downloader" `
+  "$env:USERPROFILE\.claude\skills\zju-literature-downloader"
 ```
 
 Optional Python helpers:
@@ -95,13 +110,37 @@ The skill instructs the agent to:
 6. verify each file as a readable PDF or document;
 7. record all results in a manifest.
 
+## Claude Code / Windows Notes
+
+Claude Code on Windows may differ from Codex in a few practical ways:
+
+- Claude Code often discovers skills from `%USERPROFILE%\.claude\skills\`, while Codex uses `%USERPROFILE%\.codex\skills\` and some agent setups use `%USERPROFILE%\.agents\skills\`.
+- If `curl` is unavailable or behaves differently, use PowerShell `Invoke-WebRequest` for simple HTTP checks, or the bundled Node.js helper scripts for CDP proxy calls.
+- Keep Python output UTF-8. The helper script now reconfigures stdout/stderr to UTF-8 itself, but this command is still the safest form:
+
+```powershell
+$env:PYTHONUTF8='1'
+python -X utf8 "$env:USERPROFILE\.claude\skills\zju-literature-downloader\scripts\extract_pdf_text.py" --pdf "D:\papers\paper.pdf" --pages 3
+```
+
+- Summon URLs often contain `#!`. If that nested URL is passed through another URL without encoding, the fragment can be stripped and Chrome may open `about:blank` or the wrong page. Prefer `scripts/cdp_open_url.mjs` for Summon and other fragment-heavy URLs.
+
 ## Helper Scripts
+
+Open a Summon or publisher URL through the CDP proxy without losing `#!` fragments:
+
+```powershell
+$node = "$env:LOCALAPPDATA\OpenAI\Codex\bin\node.exe"
+& $node "$env:USERPROFILE\.claude\skills\zju-literature-downloader\scripts\cdp_open_url.mjs" `
+  --url "https://zju.summon.serialssolutions.com/search?#!/search?pn=1&ho=t&include.ft.matches=f&l=en&q=10.1021%2Facs.biomac.4c00102" `
+  --wait
+```
 
 Download a PDF that opens in Chrome but fails from shell:
 
 ```powershell
 $node = "$env:LOCALAPPDATA\OpenAI\Codex\bin\node.exe"
-& $node "$env:USERPROFILE\.codex\skills\zju-literature-downloader\scripts\browser_pdf_downloader.mjs" `
+& $node "$env:USERPROFILE\.claude\skills\zju-literature-downloader\scripts\browser_pdf_downloader.mjs" `
   --url "https://pubs.acs.org/doi/pdf/10.1021/acs.biomac.4c00102" `
   --out "D:\papers\paper.pdf" `
   --close
@@ -111,7 +150,7 @@ Extract and verify PDF text:
 
 ```powershell
 $env:PYTHONUTF8='1'
-python -X utf8 "$env:USERPROFILE\.codex\skills\zju-literature-downloader\scripts\extract_pdf_text.py" `
+python -X utf8 "$env:USERPROFILE\.claude\skills\zju-literature-downloader\scripts\extract_pdf_text.py" `
   --pdf "D:\papers\paper.pdf" `
   --pages 3
 ```
@@ -140,6 +179,7 @@ zju-literature-downloader/
 │   └── manifest-template.tsv
 └── scripts/
     ├── browser_pdf_downloader.mjs
+    ├── cdp_open_url.mjs
     └── extract_pdf_text.py
 ```
 

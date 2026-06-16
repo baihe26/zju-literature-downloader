@@ -2,7 +2,7 @@
 name: zju-literature-downloader
 description: Use this skill whenever the user wants to use their own logged-in Zhejiang University Library, WebVPN, 求是学术搜索, Summon, publisher, or Chrome session to legally search, download, organize, and read academic PDFs and supporting information. Trigger on requests like “用浙大图书馆下载文献”, “WebVPN 下载 PDF”, “自动下载补充材料”, “读取全文和 supporting information”, “批量整理文献到项目文件夹”, or “导入 Zotero 后帮我读全文”.
 metadata:
-  compatibility: Requires a local Chrome session logged in by the user, Chrome remote debugging permission, and a shell with Node.js 22+ or a bundled Node runtime. Uses only user-authorized access.
+  compatibility: Requires a local Chrome session logged in by the user, Chrome remote debugging permission, and a shell with Node.js 22+ or a bundled Node runtime. Uses only user-authorized access. Claude Code may need installation under .claude/skills.
 ---
 
 # ZJU Literature Downloader
@@ -31,9 +31,18 @@ Before attempting downloads, confirm these conditions:
    - Try `node --version`.
    - If `node` is not on PATH in Codex Desktop, try `%LOCALAPPDATA%\OpenAI\Codex\bin\node.exe`.
 5. The web-access CDP proxy is available or can be started.
-   - Typical path for Claude/Codex shared skills: `%USERPROFILE%\.agents\skills\web-access-main\scripts\check-deps.mjs`.
+   - Typical Claude Code path: `%USERPROFILE%\.claude\skills\web-access-main\scripts\check-deps.mjs`.
+   - Typical shared agent path: `%USERPROFILE%\.agents\skills\web-access-main\scripts\check-deps.mjs`.
    - In Codex-only setups also check `%USERPROFILE%\.codex\skills\web-access-main\scripts\check-deps.mjs`.
 6. The user has approved the target output folder.
+
+If Claude Code says this skill is not installed, install or copy it to:
+
+```powershell
+$env:USERPROFILE\.claude\skills\zju-literature-downloader
+```
+
+Codex and other agent setups may instead use `.codex\skills` or `.agents\skills`; treat the three locations as install targets, not as different skill versions.
 
 ## Batch Scope
 
@@ -58,7 +67,14 @@ $node = "node"
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
   $node = "$env:LOCALAPPDATA\OpenAI\Codex\bin\node.exe"
 }
-& $node "$env:USERPROFILE\.agents\skills\web-access-main\scripts\check-deps.mjs"
+$checkDepsCandidates = @(
+  "$env:USERPROFILE\.claude\skills\web-access-main\scripts\check-deps.mjs",
+  "$env:USERPROFILE\.agents\skills\web-access-main\scripts\check-deps.mjs",
+  "$env:USERPROFILE\.codex\skills\web-access-main\scripts\check-deps.mjs"
+)
+$checkDeps = $checkDepsCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $checkDeps) { throw "web-access-main/scripts/check-deps.mjs not found" }
+& $node $checkDeps
 ```
 
 Then test:
@@ -79,17 +95,27 @@ Prefer the library discovery route before direct publisher pages. It is more sta
 
 1. Search by DOI or exact title in ZJU Summon:
    - `https://zju.summon.serialssolutions.com/search?#!/search?pn=1&ho=t&include.ft.matches=f&l=en&q=<URL-encoded DOI or title>`
-2. Read the result page with `/eval`.
-3. Extract links whose visible text or `aria-label` is:
+2. Open Summon URLs through `scripts/cdp_open_url.mjs` or otherwise fully URL-encode the nested URL when calling the CDP proxy. Summon uses `#!`; if the `#` fragment is stripped, Chrome may open `about:blank` or the wrong page.
+3. Read the result page with `/eval`.
+4. Extract links whose visible text or `aria-label` is:
    - `PDF`
    - `在线全文`
    - `Full Text`
    - `View PDF`
    - publisher-specific full-text entries.
-4. Prefer the result's `PDF` link when present.
-5. Open the PDF link in a new background tab through the CDP proxy.
-6. If the publisher shows a security challenge, ask the user to complete it manually.
-7. Once the PDF is visible in Chrome, use `scripts/browser_pdf_downloader.mjs` to save it from the authenticated browser context.
+5. Prefer the result's `PDF` link when present.
+6. Open the PDF link in a new background tab through the CDP proxy.
+7. If the publisher shows a security challenge, ask the user to complete it manually.
+8. Once the PDF is visible in Chrome, use `scripts/browser_pdf_downloader.mjs` to save it from the authenticated browser context.
+
+PowerShell example for opening a Summon URL safely:
+
+```powershell
+$node = "$env:LOCALAPPDATA\OpenAI\Codex\bin\node.exe"
+& $node "$env:USERPROFILE\.claude\skills\zju-literature-downloader\scripts\cdp_open_url.mjs" `
+  --url "https://zju.summon.serialssolutions.com/search?#!/search?pn=1&ho=t&include.ft.matches=f&l=en&q=10.1021%2Facs.biomac.4c00102" `
+  --wait
+```
 
 ## Download PDF From Browser Context
 
@@ -158,12 +184,13 @@ After downloading, verify every file.
 For PDFs:
 
 ```powershell
-python "$env:USERPROFILE\.agents\skills\zju-literature-downloader\scripts\extract_pdf_text.py" `
+$env:PYTHONUTF8='1'
+python -X utf8 "$env:USERPROFILE\.claude\skills\zju-literature-downloader\scripts\extract_pdf_text.py" `
   --pdf "D:\path\paper.pdf" `
   --pages 3
 ```
 
-This should report page count and extracted text. If extraction fails but the PDF is valid, try PyMuPDF, OCR, or the local `pdf` skill.
+This should report page count and extracted text. The script also reconfigures stdout/stderr to UTF-8 internally to reduce Windows GBK failures. If extraction fails but the PDF is valid, try PyMuPDF, OCR, or the local `pdf` skill.
 
 Minimum verification checklist:
 
@@ -214,6 +241,17 @@ If Summon shows no PDF:
 - Try DOI on the publisher page.
 - Check open-access copies only from legitimate sources.
 - Record "no authorized PDF found" rather than seeking unauthorized mirrors.
+
+If Summon or another site opens as `about:blank`:
+
+- Treat it as a URL-fragment/encoding problem first, especially when the original URL contains `#!`.
+- Reopen through `scripts/cdp_open_url.mjs --url "<full URL>" --wait`.
+- Do not paste fragment-heavy URLs unquoted into shell commands or manually concatenate them into `/new?url=...` without URL encoding.
+
+If `curl` is unavailable:
+
+- Use PowerShell `Invoke-WebRequest` for simple proxy checks.
+- Prefer the bundled Node.js helper scripts for CDP proxy actions because Node's `URLSearchParams` preserves nested URL fragments correctly.
 
 If the session expires:
 
