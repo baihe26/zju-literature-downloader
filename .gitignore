@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pdf
+*.docx
+*.xlsx
+downloaded/
+extracted_text/
+manifest.local.*
+CX_tmp_*
+
