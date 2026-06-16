@@ -1,5 +1,0 @@
-interface:
-  display_name: "ZJU 文献下载与全文读取"
-  short_description: "使用用户已登录的浙大图书馆/WebVPN Chrome 会话下载 PDF、补充材料并验证全文可读性。"
-  default_prompt: "请使用 zju-literature-downloader 技能，通过我已登录的浙大图书馆/WebVPN 浏览器会话下载并读取文献。"
-
