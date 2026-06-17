@@ -1,6 +1,6 @@
 ---
 name: zju-literature-downloader
-description: Use this skill whenever the user wants to use their own logged-in Zhejiang University Library, WebVPN, 求是学术搜索, Summon, publisher, or Chrome session to legally search, download, organize, and read academic PDFs and supporting information. Trigger on requests like “用浙大图书馆下载文献”, “WebVPN 下载 PDF”, “自动下载补充材料”, “读取全文和 supporting information”, “批量整理文献到项目文件夹”, or “导入 Zotero 后帮我读全文”.
+description: Use this skill whenever the user wants to use their own logged-in Zhejiang University Library, WebVPN, CAS SSO, 求是学术搜索, Summon, ScienceDirect, publisher, or Chrome session to legally search, download, organize, retry, and read academic PDFs and supporting information. Trigger on requests like “用浙大图书馆下载文献”, “WebVPN 下载 PDF”, “CAS 认证失败后重试下载”, “ScienceDirect 人机验证后继续”, “自动下载补充材料”, “读取全文和 supporting information”, “批量整理文献到项目文件夹”, or “导入 Zotero 后帮我读全文”.
 metadata:
   compatibility: Requires a local Chrome session logged in by the user, Chrome remote debugging permission, and a shell with Node.js 22+ or a bundled Node runtime. Uses only user-authorized access. Claude Code may need installation under .claude/skills.
 ---
@@ -11,9 +11,13 @@ This skill turns the verified workflow into a repeatable, legally scoped process
 
 ## Boundaries
 
-Use only the user's legitimate institutional access. Do not bypass paywalls, DRM, CAPTCHA, Cloudflare, publisher bot checks, school authentication, or two-factor authentication. If a page asks for a login, verification, consent, CAPTCHA, or security check, stop and ask the user to complete it in Chrome.
+Use only the user's legitimate institutional access. Do not bypass paywalls, DRM, CAPTCHA, Cloudflare, publisher bot checks, or two-factor authentication. If a page asks for CAPTCHA, QR login, SMS/OTP, Cloudflare, publisher bot checks, or a security challenge, stop and ask the user to complete it in Chrome.
 
 Avoid mass downloading. Work in small batches, preferably after the user confirms the paper list. Leave a clear audit trail of what was downloaded, from where, and whether supporting information was found.
+
+Do not ask the user to paste institutional passwords, CAS credentials, OTP codes, recovery codes, or session tokens into chat or terminal. If the user offers a password, decline and use the handoff-login workflow instead.
+
+Exception for ZJU CAS saved-login pages: if the user explicitly says that Chrome has already filled the ZJU CAS credentials and authorizes clicking the login/confirm button, the agent may click that button once on the ZJU CAS/WebVPN/institutional SSO page without reading, copying, or typing any credential. This exception does not apply to CAPTCHA, QR login, SMS/OTP, publisher bot checks, or any page outside the expected institutional login flow.
 
 Do not inspect or export cookies, passwords, local storage, browser profiles, or session files. Use the browser's already-authenticated page context only.
 
@@ -55,6 +59,30 @@ Recommended limits:
 - stop immediately if publisher checks, CAPTCHA, WebVPN expiry, or unusual download prompts appear
 
 Do not turn a broad keyword search into unlimited automatic downloading. Do not download whole journal issues, volumes, or large result sets.
+
+## Status Categories
+
+Classify every paper into one of these statuses, and keep the status in the manifest:
+
+```text
+downloaded
+downloaded_with_si
+cas_waiting_user
+cas_resolved_retry_needed
+publisher_verification_waiting_user
+sciencedirect_robot_check
+retry_after_user_verification
+do_not_auto_retry
+url_needs_repair
+summon_no_link
+publisher_blocked_waiting_user
+no_authorized_pdf_found
+failed_after_retry
+```
+
+Use `cas_waiting_user` only when the browser is visibly at Zhejiang University CAS / unified identity authentication or an equivalent institutional SSO step. Do not treat this as a final failure.
+
+Use `publisher_verification_waiting_user` or `sciencedirect_robot_check` when a publisher page shows "Are you a robot?", CAPTCHA, Cloudflare, bot verification, or another anti-automation challenge. Do not treat this as a final failure, but do not try to solve it automatically.
 
 ## Start Chrome Control
 
@@ -108,6 +136,44 @@ Prefer the library discovery route before direct publisher pages. It is more sta
 7. If the publisher shows a security challenge, ask the user to complete it manually.
 8. Once the PDF is visible in Chrome, use `scripts/browser_pdf_downloader.mjs` to save it from the authenticated browser context.
 
+## Publisher Verification and ScienceDirect
+
+ScienceDirect and some publisher platforms may show "Are you a robot?", CAPTCHA, Cloudflare, bot verification, or similar checks after repeated direct DOI navigation or automated tab opening. These pages are security and anti-automation challenges, not ordinary login confirmations.
+
+Reduce the chance of triggering them by using a conservative access pattern:
+
+1. Prefer ZJU Summon / WebVPN / library `在线全文` links before direct `doi.org -> publisher` navigation.
+2. Process ScienceDirect and other sensitive publishers one article at a time.
+3. Keep a visible audit trail in the manifest; do not open many publisher tabs in parallel.
+4. Wait for each page to settle before looking for `Download PDF`, `View PDF`, or `PDF`.
+5. Reuse the same tab after the user completes a verification step instead of opening repeated new tabs.
+6. Avoid retry loops. One failed automatic attempt is enough before handing the page to the user.
+
+When a publisher verification page appears:
+
+1. Stop automated actions on that tab.
+2. Record the paper in `publisher_verification.tsv` or the main manifest with status `publisher_verification_waiting_user`; use `sciencedirect_robot_check` for ScienceDirect's "Are you a robot?" page.
+3. Tell the user which paper and tab need manual attention.
+4. Do not click CAPTCHA, Cloudflare, "Are you a robot?", bot-check, or similar challenge controls automatically.
+5. After the user says the verification is complete, continue from the same tab and try the visible article/PDF route once.
+6. If verification immediately reappears, mark `do_not_auto_retry` and move on.
+
+Create or update `publisher_verification.tsv` when publisher checks interrupt a batch. Use this header:
+
+```text
+id	project	title	doi	year	venue	publisher	status	source_url	current_url	next_action	notes
+```
+
+Suggested `next_action` values:
+
+```text
+user_complete_publisher_verification
+retry_same_tab_after_user_confirms
+try_summon_route
+try_authorized_oa_route
+mark_do_not_auto_retry
+```
+
 PowerShell example for opening a Summon URL safely:
 
 ```powershell
@@ -116,6 +182,55 @@ $node = "$env:LOCALAPPDATA\OpenAI\Codex\bin\node.exe"
   --url "https://zju.summon.serialssolutions.com/search?#!/search?pn=1&ho=t&include.ft.matches=f&l=en&q=10.1021%2Facs.biomac.4c00102" `
   --wait
 ```
+
+## CAS SSO Handoff and Retry
+
+Some publishers, especially Elsevier/ScienceDirect, Springer Nature, Nature Portfolio, Wiley, Taylor & Francis, Cell Press, and society platforms routed through Shibboleth/OpenAthens, may redirect to Zhejiang University CAS even when WebVPN is open. This is not a reason to ask for the user's password.
+
+When a paper reaches a CAS or institutional SSO page:
+
+1. Stop automated actions on that tab.
+2. Record the paper in `cas_retry.tsv` with status `cas_waiting_user`.
+3. Tell the user exactly which tab/page needs attention, for example: "This paper is at ZJU CAS. If Chrome has already filled the account and password, I can click the login/confirm button once with your authorization; otherwise please complete it in Chrome."
+4. Do not read, store, or request the password, QR result, OTP, SMS code, CAPTCHA, cookie, or local/session storage.
+5. If the user explicitly authorizes clicking because the CAS credentials are already filled in Chrome, click only the visible ZJU CAS/WebVPN/institutional SSO login/confirm button once. Do not type into fields or inspect hidden credential values.
+6. If QR login, SMS/OTP, CAPTCHA, Cloudflare, or publisher bot verification appears, stop and let the user complete it manually.
+7. After the login/confirm step completes, refresh or continue from the same tab.
+8. Re-detect whether the page is now a publisher article page, a PDF viewer, or another institutional handoff.
+9. If resolved, download and verify the PDF/SI, then update the manifest status to `downloaded` or `downloaded_with_si`.
+10. If it loops back to CAS after a completed user login, record `failed_after_retry` with the observed reason and move on.
+
+### Safe CAS Auto-Confirm
+
+The agent may click a ZJU CAS saved-login confirmation button only when all conditions are true:
+
+```text
+1. The page is on an expected institutional domain such as zjuam.zju.edu.cn, webvpn.zju.edu.cn, libweb.zju.edu.cn, or an institution-redirect page reached from Summon/publisher access.
+2. The user has explicitly authorized this action in the current conversation, for example: "可以点浙大 CAS 登录按钮".
+3. The visible action is clearly a login/confirm/continue button, such as 登录, 登 录, 确认登录, 继续登录, Continue, Proceed, or Sign in.
+4. There is no visible CAPTCHA, Cloudflare challenge, QR-only login, SMS/OTP field, push-approval prompt, password reset prompt, consent-to-share-new-data prompt, or account/security warning.
+5. The agent does not read, reveal, copy, store, type, or modify credentials.
+```
+
+If any condition is unclear, pause and ask the user to handle that tab. Do not repeatedly click login; one click is enough to test whether the saved-login state works.
+
+Create or update `cas_retry.tsv` whenever CAS blocks a batch. Use this header:
+
+```text
+id	project	title	doi	year	venue	publisher	failure_stage	status	source_url	current_url	next_action	notes
+```
+
+Suggested `next_action` values:
+
+```text
+user_complete_cas_in_chrome
+retry_same_tab_after_user_confirms
+repair_url_by_doi
+inspect_summon_alternative_links
+mark_no_authorized_pdf
+```
+
+For a CAS retry batch, process one or a few tabs at a time. Do not open many CAS/login tabs in parallel; it can confuse the user's session and increase publisher or SSO risk.
 
 ## Download PDF From Browser Context
 
@@ -225,15 +340,32 @@ For project work, keep a folder like:
 
 ## Failure Handling
 
-If direct publisher navigation triggers Cloudflare or another bot challenge:
+If direct publisher navigation triggers ScienceDirect "Are you a robot?", Cloudflare, CAPTCHA, or another bot challenge:
 
 - Do not bypass it.
+- Do not auto-click the challenge.
+- Record `publisher_verification_waiting_user` or `sciencedirect_robot_check`.
 - Ask the user to solve it in Chrome.
-- Then continue from the now-open page.
+- Then continue once from the same now-open page.
+- If the same challenge immediately reappears, mark `do_not_auto_retry` and move on.
 
 If shell `Invoke-WebRequest` or `curl` returns 403 but the PDF opens in Chrome:
 
 - Use `browser_pdf_downloader.mjs`; this is the normal institutional-access case.
+
+If a page shows publisher bot verification, CAPTCHA, Cloudflare, QR login, SMS/OTP, or another security challenge:
+
+- Do not ask for or accept credentials in chat.
+- Pause and ask the user to complete the verification in Chrome.
+- Record `publisher_verification_waiting_user` in `publisher_verification.tsv`, or `sciencedirect_robot_check` for ScienceDirect.
+- Continue only after the user says the browser step is complete.
+
+If a page shows Zhejiang University CAS, unified identity authentication, Shibboleth, OpenAthens, SAML, or institutional sign-in:
+
+- Do not ask for or accept credentials in chat.
+- If the user has explicitly authorized it and Chrome has already filled the ZJU CAS fields, click the visible login/confirm button once.
+- Otherwise pause and ask the user to complete the login in Chrome.
+- Record `cas_waiting_user` or `cas_resolved_retry_needed` in `cas_retry.tsv` as appropriate.
 
 If Summon shows no PDF:
 
