@@ -14,10 +14,10 @@ A Codex/Claude skill for legally downloading and reading academic PDFs through t
 3. 在 Chrome 地址栏打开 `chrome://inspect/#remote-debugging`，勾选 `Allow remote debugging for this browser instance`。
 4. 告诉 Codex/Claude 你的文献清单，例如 DOI、题目或 PMID，并说明输出文件夹。
 5. agent 会通过你已经登录的 Chrome 会话检索、打开 PDF、保存主文和补充材料，并生成下载记录。
-6. 如果网页要求验证码、Cloudflare、人机验证、WebVPN 重新登录或二次认证，需要你本人在 Chrome 里完成；agent 不绕过这些验证。
+6. 如果网页要求验证码、Cloudflare、人机验证、扫码、短信/OTP 或二次认证，需要你本人在 Chrome 里完成；agent 不绕过这些验证。
 7. 推荐小批量使用：一次 5-10 篇比较稳，最多 15-20 篇，并保留 manifest 记录。不要用它批量扫关键词结果、整期杂志或大量连续下载。
 8. 如果 Claude Code 没有自动识别这个 skill，把仓库安装到 `%USERPROFILE%\.claude\skills\zju-literature-downloader`，然后重启或刷新 Claude Code。
-9. 如果遇到浙大统一身份认证 / CAS SSO，不要把账号密码发给 agent。让 agent 暂停在浏览器页面，你自己在 Chrome 里完成登录/扫码/验证码，然后让 agent 继续。
+9. 如果遇到浙大统一身份认证 / CAS SSO，不要把账号密码发给 agent。若 Chrome 已经自动填好账号密码，你可以明确授权 agent 只点一次“登录/确认登录”；若出现扫码、短信/OTP、验证码、人机验证或安全提示，则需要你自己在 Chrome 里完成。
 
 可以这样对 agent 说：
 
@@ -38,9 +38,9 @@ A Codex/Claude skill for legally downloading and reading academic PDFs through t
 
 This skill only uses user-authorized institutional access.
 
-It does not bypass paywalls, CAPTCHA, Cloudflare, school login, two-factor authentication, publisher bot checks, DRM, or account restrictions. If a page asks for verification, the user must complete it in Chrome.
+It does not bypass paywalls, CAPTCHA, Cloudflare, two-factor authentication, publisher bot checks, DRM, or account restrictions. If a page asks for CAPTCHA, QR login, SMS/OTP, Cloudflare, or publisher bot verification, the user must complete it in Chrome.
 
-Do not paste school account passwords, CAS passwords, SMS codes, OTP codes, QR login results, cookies, or session tokens into chat. The intended workflow is browser handoff: the agent opens the page, the user completes authentication in Chrome, and the agent resumes after the user confirms.
+Do not paste school account passwords, CAS passwords, SMS codes, OTP codes, QR login results, cookies, or session tokens into chat. The intended workflow is browser handoff: the agent opens the page, the user completes authentication in Chrome, and the agent resumes after the user confirms. If the ZJU CAS page is already filled by Chrome's password manager and you explicitly authorize it, the agent may click the visible login/confirm button once without reading or typing credentials.
 
 Small batches are supported when the user provides a definite DOI/title/PMID list. Avoid broad keyword-result scraping, whole-issue downloads, or large automated runs.
 
@@ -130,14 +130,15 @@ id	project	title	doi	year	venue	publisher	failure_stage	status	source_url	curren
 3. Use `cas_waiting_user` for papers currently stopped at CAS/SSO.
 4. Let the agent open one or a few failed links in Chrome.
 5. When the browser reaches CAS, the agent should pause.
-6. You complete CAS login, QR scan, SMS/OTP, CAPTCHA, or WebVPN refresh manually in Chrome.
-7. Tell the agent to continue from the same tab.
-8. The agent retries PDF / Full Text / Download PDF and updates the manifest.
+6. If Chrome has already filled the ZJU CAS account/password and the page only needs a login/confirm click, you can explicitly authorize the agent to click that visible button once.
+7. If the page asks for QR scan, SMS/OTP, CAPTCHA, Cloudflare, publisher bot verification, or a security warning, complete that step manually in Chrome.
+8. Tell the agent to continue from the same tab.
+9. The agent retries PDF / Full Text / Download PDF and updates the manifest.
 
 A useful prompt:
 
 ```text
-不要让我提供账号密码。请把 CAS 失败文献整理成 cas_retry.tsv，然后逐篇用已登录 Chrome 打开。遇到浙大 CAS、验证码、WebVPN 重新登录或二次认证时暂停，让我手动完成认证；认证完成后继续下载 PDF 和 supporting information。URL 格式失败的文献请按 DOI 重新定位出版社页面和真实 PDF 链接。
+不要让我提供账号密码。请把 CAS 失败文献整理成 cas_retry.tsv，然后逐篇用已登录 Chrome 打开。遇到浙大 CAS 时，如果 Chrome 已经自动填好账号密码，可以在我授权后只点一次登录/确认登录；遇到验证码、人机验证、扫码、短信/OTP、WebVPN 重新登录或二次认证时暂停，让我手动完成认证；认证完成后继续下载 PDF 和 supporting information。URL 格式失败的文献请按 DOI 重新定位出版社页面和真实 PDF 链接。
 ```
 
 Do not process many CAS tabs at once. Work in small groups so the user can clearly see which page needs authentication and so the institutional session does not get confused.

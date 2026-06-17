@@ -11,11 +11,13 @@ This skill turns the verified workflow into a repeatable, legally scoped process
 
 ## Boundaries
 
-Use only the user's legitimate institutional access. Do not bypass paywalls, DRM, CAPTCHA, Cloudflare, publisher bot checks, school authentication, or two-factor authentication. If a page asks for a login, verification, consent, CAPTCHA, or security check, stop and ask the user to complete it in Chrome.
+Use only the user's legitimate institutional access. Do not bypass paywalls, DRM, CAPTCHA, Cloudflare, publisher bot checks, or two-factor authentication. If a page asks for CAPTCHA, QR login, SMS/OTP, Cloudflare, publisher bot checks, or a security challenge, stop and ask the user to complete it in Chrome.
 
 Avoid mass downloading. Work in small batches, preferably after the user confirms the paper list. Leave a clear audit trail of what was downloaded, from where, and whether supporting information was found.
 
-Do not ask the user to paste institutional passwords, CAS credentials, OTP codes, recovery codes, or session tokens into chat or terminal. If the user offers a password, decline and use the handoff-login workflow instead: open the CAS page in Chrome, pause, ask the user to complete the login in the browser, then continue after they confirm.
+Do not ask the user to paste institutional passwords, CAS credentials, OTP codes, recovery codes, or session tokens into chat or terminal. If the user offers a password, decline and use the handoff-login workflow instead.
+
+Exception for ZJU CAS saved-login pages: if the user explicitly says that Chrome has already filled the ZJU CAS credentials and authorizes clicking the login/confirm button, the agent may click that button once on the ZJU CAS/WebVPN/institutional SSO page without reading, copying, or typing any credential. This exception does not apply to CAPTCHA, QR login, SMS/OTP, publisher bot checks, or any page outside the expected institutional login flow.
 
 Do not inspect or export cookies, passwords, local storage, browser profiles, or session files. Use the browser's already-authenticated page context only.
 
@@ -145,12 +147,28 @@ When a paper reaches a CAS or institutional SSO page:
 
 1. Stop automated actions on that tab.
 2. Record the paper in `cas_retry.tsv` with status `cas_waiting_user`.
-3. Tell the user exactly which tab/page needs attention, for example: "This paper is at ZJU CAS. Please complete the login/verification in Chrome, then tell me to continue."
+3. Tell the user exactly which tab/page needs attention, for example: "This paper is at ZJU CAS. If Chrome has already filled the account and password, I can click the login/confirm button once with your authorization; otherwise please complete it in Chrome."
 4. Do not read, store, or request the password, QR result, OTP, SMS code, CAPTCHA, cookie, or local/session storage.
-5. After the user confirms login is complete, refresh or continue from the same tab.
-6. Re-detect whether the page is now a publisher article page, a PDF viewer, or another institutional handoff.
-7. If resolved, download and verify the PDF/SI, then update the manifest status to `downloaded` or `downloaded_with_si`.
-8. If it loops back to CAS after a completed user login, record `failed_after_retry` with the observed reason and move on.
+5. If the user explicitly authorizes clicking because the CAS credentials are already filled in Chrome, click only the visible ZJU CAS/WebVPN/institutional SSO login/confirm button once. Do not type into fields or inspect hidden credential values.
+6. If QR login, SMS/OTP, CAPTCHA, Cloudflare, or publisher bot verification appears, stop and let the user complete it manually.
+7. After the login/confirm step completes, refresh or continue from the same tab.
+8. Re-detect whether the page is now a publisher article page, a PDF viewer, or another institutional handoff.
+9. If resolved, download and verify the PDF/SI, then update the manifest status to `downloaded` or `downloaded_with_si`.
+10. If it loops back to CAS after a completed user login, record `failed_after_retry` with the observed reason and move on.
+
+### Safe CAS Auto-Confirm
+
+The agent may click a ZJU CAS saved-login confirmation button only when all conditions are true:
+
+```text
+1. The page is on an expected institutional domain such as zjuam.zju.edu.cn, webvpn.zju.edu.cn, libweb.zju.edu.cn, or an institution-redirect page reached from Summon/publisher access.
+2. The user has explicitly authorized this action in the current conversation, for example: "可以点浙大 CAS 登录按钮".
+3. The visible action is clearly a login/confirm/continue button, such as 登录, 登 录, 确认登录, 继续登录, Continue, Proceed, or Sign in.
+4. There is no visible CAPTCHA, Cloudflare challenge, QR-only login, SMS/OTP field, push-approval prompt, password reset prompt, consent-to-share-new-data prompt, or account/security warning.
+5. The agent does not read, reveal, copy, store, type, or modify credentials.
+```
+
+If any condition is unclear, pause and ask the user to handle that tab. Do not repeatedly click login; one click is enough to test whether the saved-login state works.
 
 Create or update `cas_retry.tsv` whenever CAS blocks a batch. Use this header:
 
@@ -288,12 +306,19 @@ If shell `Invoke-WebRequest` or `curl` returns 403 but the PDF opens in Chrome:
 
 - Use `browser_pdf_downloader.mjs`; this is the normal institutional-access case.
 
-If a page shows Zhejiang University CAS, unified identity authentication, Shibboleth, OpenAthens, SAML, institutional sign-in, QR login, SMS/OTP, or CAPTCHA:
+If a page shows publisher bot verification, CAPTCHA, Cloudflare, QR login, SMS/OTP, or another security challenge:
 
 - Do not ask for or accept credentials in chat.
-- Pause and ask the user to complete the login or verification in Chrome.
+- Pause and ask the user to complete the verification in Chrome.
 - Record `cas_waiting_user` in `cas_retry.tsv`.
-- Continue only after the user says the browser login is complete.
+- Continue only after the user says the browser step is complete.
+
+If a page shows Zhejiang University CAS, unified identity authentication, Shibboleth, OpenAthens, SAML, or institutional sign-in:
+
+- Do not ask for or accept credentials in chat.
+- If the user has explicitly authorized it and Chrome has already filled the ZJU CAS fields, click the visible login/confirm button once.
+- Otherwise pause and ask the user to complete the login in Chrome.
+- Record `cas_waiting_user` or `cas_resolved_retry_needed` in `cas_retry.tsv` as appropriate.
 
 If Summon shows no PDF:
 
