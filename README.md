@@ -17,6 +17,7 @@ A Codex/Claude skill for legally downloading and reading academic PDFs through t
 6. 如果网页要求验证码、Cloudflare、人机验证、WebVPN 重新登录或二次认证，需要你本人在 Chrome 里完成；agent 不绕过这些验证。
 7. 推荐小批量使用：一次 5-10 篇比较稳，最多 15-20 篇，并保留 manifest 记录。不要用它批量扫关键词结果、整期杂志或大量连续下载。
 8. 如果 Claude Code 没有自动识别这个 skill，把仓库安装到 `%USERPROFILE%\.claude\skills\zju-literature-downloader`，然后重启或刷新 Claude Code。
+9. 如果遇到浙大统一身份认证 / CAS SSO，不要把账号密码发给 agent。让 agent 暂停在浏览器页面，你自己在 Chrome 里完成登录/扫码/验证码，然后让 agent 继续。
 
 可以这样对 agent 说：
 
@@ -28,6 +29,7 @@ A Codex/Claude skill for legally downloading and reading academic PDFs through t
 
 - ZJU Library / WebVPN can open a paper, but direct `curl` or `Invoke-WebRequest` returns 403.
 - A DOI/title list needs small-batch PDF and supporting information collection.
+- CAS SSO interrupts a batch and the failed papers need to be retried after the user manually authenticates in Chrome.
 - The user wants a manifest recording DOI, source URL, download status, SI status, and local paths.
 - PDFs need to be verified before an agent reads, summarizes, or cites them.
 - Zotero can import metadata, but the user still wants local project-folder PDFs.
@@ -37,6 +39,8 @@ A Codex/Claude skill for legally downloading and reading academic PDFs through t
 This skill only uses user-authorized institutional access.
 
 It does not bypass paywalls, CAPTCHA, Cloudflare, school login, two-factor authentication, publisher bot checks, DRM, or account restrictions. If a page asks for verification, the user must complete it in Chrome.
+
+Do not paste school account passwords, CAS passwords, SMS codes, OTP codes, QR login results, cookies, or session tokens into chat. The intended workflow is browser handoff: the agent opens the page, the user completes authentication in Chrome, and the agent resumes after the user confirms.
 
 Small batches are supported when the user provides a definite DOI/title/PMID list. Avoid broad keyword-result scraping, whole-issue downloads, or large automated runs.
 
@@ -110,6 +114,34 @@ The skill instructs the agent to:
 6. verify each file as a readable PDF or document;
 7. record all results in a manifest.
 
+## CAS / SSO Retry Workflow
+
+Some publishers may still ask for Zhejiang University CAS / unified identity authentication after WebVPN is open. This is common with Elsevier/ScienceDirect, Springer Nature, Nature Portfolio, Wiley, Taylor & Francis, Cell Press, and other platforms that use institutional sign-in.
+
+Recommended workflow:
+
+1. Ask the agent to collect all CAS-blocked papers into `cas_retry.tsv`.
+2. Keep these columns:
+
+```text
+id	project	title	doi	year	venue	publisher	failure_stage	status	source_url	current_url	next_action	notes
+```
+
+3. Use `cas_waiting_user` for papers currently stopped at CAS/SSO.
+4. Let the agent open one or a few failed links in Chrome.
+5. When the browser reaches CAS, the agent should pause.
+6. You complete CAS login, QR scan, SMS/OTP, CAPTCHA, or WebVPN refresh manually in Chrome.
+7. Tell the agent to continue from the same tab.
+8. The agent retries PDF / Full Text / Download PDF and updates the manifest.
+
+A useful prompt:
+
+```text
+不要让我提供账号密码。请把 CAS 失败文献整理成 cas_retry.tsv，然后逐篇用已登录 Chrome 打开。遇到浙大 CAS、验证码、WebVPN 重新登录或二次认证时暂停，让我手动完成认证；认证完成后继续下载 PDF 和 supporting information。URL 格式失败的文献请按 DOI 重新定位出版社页面和真实 PDF 链接。
+```
+
+Do not process many CAS tabs at once. Work in small groups so the user can clearly see which page needs authentication and so the institutional session does not get confused.
+
 ## Claude Code / Windows Notes
 
 Claude Code on Windows may differ from Codex in a few practical ways:
@@ -165,6 +197,8 @@ id	title	doi	year	venue	status	pdf_path	si_status	si_paths	source_url	notes
 
 Keep the batch small and auditable. Stop when login, CAPTCHA, WebVPN expiry, publisher security checks, or suspicious download prompts appear.
 
+For CAS retries, use the richer template in `examples/cas-retry-template.tsv`.
+
 ## Repository Layout
 
 ```text
@@ -176,7 +210,8 @@ zju-literature-downloader/
 ├── agents/
 │   └── openai.yaml
 ├── examples/
-│   └── manifest-template.tsv
+│   ├── manifest-template.tsv
+│   └── cas-retry-template.tsv
 └── scripts/
     ├── browser_pdf_downloader.mjs
     ├── cdp_open_url.mjs

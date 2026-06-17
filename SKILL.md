@@ -1,6 +1,6 @@
 ---
 name: zju-literature-downloader
-description: Use this skill whenever the user wants to use their own logged-in Zhejiang University Library, WebVPN, 求是学术搜索, Summon, publisher, or Chrome session to legally search, download, organize, and read academic PDFs and supporting information. Trigger on requests like “用浙大图书馆下载文献”, “WebVPN 下载 PDF”, “自动下载补充材料”, “读取全文和 supporting information”, “批量整理文献到项目文件夹”, or “导入 Zotero 后帮我读全文”.
+description: Use this skill whenever the user wants to use their own logged-in Zhejiang University Library, WebVPN, CAS SSO, 求是学术搜索, Summon, publisher, or Chrome session to legally search, download, organize, retry, and read academic PDFs and supporting information. Trigger on requests like “用浙大图书馆下载文献”, “WebVPN 下载 PDF”, “CAS 认证失败后重试下载”, “自动下载补充材料”, “读取全文和 supporting information”, “批量整理文献到项目文件夹”, or “导入 Zotero 后帮我读全文”.
 metadata:
   compatibility: Requires a local Chrome session logged in by the user, Chrome remote debugging permission, and a shell with Node.js 22+ or a bundled Node runtime. Uses only user-authorized access. Claude Code may need installation under .claude/skills.
 ---
@@ -14,6 +14,8 @@ This skill turns the verified workflow into a repeatable, legally scoped process
 Use only the user's legitimate institutional access. Do not bypass paywalls, DRM, CAPTCHA, Cloudflare, publisher bot checks, school authentication, or two-factor authentication. If a page asks for a login, verification, consent, CAPTCHA, or security check, stop and ask the user to complete it in Chrome.
 
 Avoid mass downloading. Work in small batches, preferably after the user confirms the paper list. Leave a clear audit trail of what was downloaded, from where, and whether supporting information was found.
+
+Do not ask the user to paste institutional passwords, CAS credentials, OTP codes, recovery codes, or session tokens into chat or terminal. If the user offers a password, decline and use the handoff-login workflow instead: open the CAS page in Chrome, pause, ask the user to complete the login in the browser, then continue after they confirm.
 
 Do not inspect or export cookies, passwords, local storage, browser profiles, or session files. Use the browser's already-authenticated page context only.
 
@@ -55,6 +57,24 @@ Recommended limits:
 - stop immediately if publisher checks, CAPTCHA, WebVPN expiry, or unusual download prompts appear
 
 Do not turn a broad keyword search into unlimited automatic downloading. Do not download whole journal issues, volumes, or large result sets.
+
+## Status Categories
+
+Classify every paper into one of these statuses, and keep the status in the manifest:
+
+```text
+downloaded
+downloaded_with_si
+cas_waiting_user
+cas_resolved_retry_needed
+url_needs_repair
+summon_no_link
+publisher_blocked_waiting_user
+no_authorized_pdf_found
+failed_after_retry
+```
+
+Use `cas_waiting_user` only when the browser is visibly at Zhejiang University CAS / unified identity authentication or an equivalent institutional SSO step. Do not treat this as a final failure.
 
 ## Start Chrome Control
 
@@ -116,6 +136,39 @@ $node = "$env:LOCALAPPDATA\OpenAI\Codex\bin\node.exe"
   --url "https://zju.summon.serialssolutions.com/search?#!/search?pn=1&ho=t&include.ft.matches=f&l=en&q=10.1021%2Facs.biomac.4c00102" `
   --wait
 ```
+
+## CAS SSO Handoff and Retry
+
+Some publishers, especially Elsevier/ScienceDirect, Springer Nature, Nature Portfolio, Wiley, Taylor & Francis, Cell Press, and society platforms routed through Shibboleth/OpenAthens, may redirect to Zhejiang University CAS even when WebVPN is open. This is not a reason to ask for the user's password.
+
+When a paper reaches a CAS or institutional SSO page:
+
+1. Stop automated actions on that tab.
+2. Record the paper in `cas_retry.tsv` with status `cas_waiting_user`.
+3. Tell the user exactly which tab/page needs attention, for example: "This paper is at ZJU CAS. Please complete the login/verification in Chrome, then tell me to continue."
+4. Do not read, store, or request the password, QR result, OTP, SMS code, CAPTCHA, cookie, or local/session storage.
+5. After the user confirms login is complete, refresh or continue from the same tab.
+6. Re-detect whether the page is now a publisher article page, a PDF viewer, or another institutional handoff.
+7. If resolved, download and verify the PDF/SI, then update the manifest status to `downloaded` or `downloaded_with_si`.
+8. If it loops back to CAS after a completed user login, record `failed_after_retry` with the observed reason and move on.
+
+Create or update `cas_retry.tsv` whenever CAS blocks a batch. Use this header:
+
+```text
+id	project	title	doi	year	venue	publisher	failure_stage	status	source_url	current_url	next_action	notes
+```
+
+Suggested `next_action` values:
+
+```text
+user_complete_cas_in_chrome
+retry_same_tab_after_user_confirms
+repair_url_by_doi
+inspect_summon_alternative_links
+mark_no_authorized_pdf
+```
+
+For a CAS retry batch, process one or a few tabs at a time. Do not open many CAS/login tabs in parallel; it can confuse the user's session and increase publisher or SSO risk.
 
 ## Download PDF From Browser Context
 
@@ -234,6 +287,13 @@ If direct publisher navigation triggers Cloudflare or another bot challenge:
 If shell `Invoke-WebRequest` or `curl` returns 403 but the PDF opens in Chrome:
 
 - Use `browser_pdf_downloader.mjs`; this is the normal institutional-access case.
+
+If a page shows Zhejiang University CAS, unified identity authentication, Shibboleth, OpenAthens, SAML, institutional sign-in, QR login, SMS/OTP, or CAPTCHA:
+
+- Do not ask for or accept credentials in chat.
+- Pause and ask the user to complete the login or verification in Chrome.
+- Record `cas_waiting_user` in `cas_retry.tsv`.
+- Continue only after the user says the browser login is complete.
 
 If Summon shows no PDF:
 
