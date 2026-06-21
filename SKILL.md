@@ -78,6 +78,8 @@ summon_no_link
 publisher_blocked_waiting_user
 no_authorized_pdf_found
 failed_after_retry
+ip_not_authorized
+purchase_required
 ```
 
 Use `cas_waiting_user` only when the browser is visibly at Zhejiang University CAS / unified identity authentication or an equivalent institutional SSO step. Do not treat this as a final failure.
@@ -117,6 +119,23 @@ If this hangs or fails:
 - Check `%TEMP%\cdp-proxy.log`.
 - Do not attempt to read Chrome session files.
 
+## Core CDP Proxy API
+
+The usual web-access proxy is `http://127.0.0.1:3456`.
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/health` | GET | Proxy health and Chrome connection status |
+| `/targets` | GET | List open Chrome tabs |
+| `/new?url=...` | GET | Create a new background tab |
+| `/navigate?target=...&url=...` | GET | Navigate an existing tab |
+| `/close?target=...` | GET | Close a tab |
+| `/info?target=...` | GET | Get page title, URL, and readyState |
+| `/eval?target=...` | POST body=JS | Execute JavaScript in a tab and return `{ value: ... }` |
+| `/clickAt?target=...` | POST body=CSS selector | Click the center of a visible element |
+
+Use `/navigate` rather than `/new` for Summon URLs containing `#!` fragments. If a `#!` fragment is stripped, Chrome may open `about:blank` or a wrong page. If `curl` is unavailable, use PowerShell `Invoke-WebRequest` for simple checks or Node.js `fetch()` for proxy calls.
+
 ## Recommended Search Workflow
 
 Prefer the library discovery route before direct publisher pages. It is more stable and less likely to trigger bot protection.
@@ -135,6 +154,89 @@ Prefer the library discovery route before direct publisher pages. It is more sta
 6. Open the PDF link in a new background tab through the CDP proxy.
 7. If the publisher shows a security challenge, ask the user to complete it manually.
 8. Once the PDF is visible in Chrome, use `scripts/browser_pdf_downloader.mjs` to save it from the authenticated browser context.
+
+### Summon Field Notes
+
+When extracting `PDF`, online full text, or publisher links from Summon:
+
+1. Skip empty `href` values. The first online-full-text match can be a facet toggle rather than a real link.
+2. Treat Summon as a slow SPA: wait about 6 seconds after navigation, then retry link extraction up to 3 times with short pauses.
+3. If Summon redirects to `login.serialssolutions.com/sso/login` and says the IP is outside the authorized range, record `ip_not_authorized`. In that case the user may need the ZJU RVPN/SSLVPN client, not only WebVPN in a browser page, because CDP-controlled Chrome tabs may still use the local network IP.
+4. If Summon has no PDF but has an online-full-text link, follow that route before constructing a publisher URL manually.
+
+## Publisher-Specific Patterns
+
+Use these as DOI-based repair hints only after confirming the paper identity. Do not claim access if the page or PDF is not actually verified.
+
+### ACS Publications
+
+For DOI prefix `10.1021/...`:
+
+```text
+https://pubs.acs.org/doi/pdf/<doi>
+```
+
+ACS supporting information often follows:
+
+```text
+https://pubs.acs.org/doi/suppl/<doi>/suppl_file/<journal-code>_si_001.pdf
+```
+
+The verified example `10.1021/acs.biomac.4c00102` used `bm4c00102_si_001.pdf`.
+
+### Wiley
+
+For DOI prefixes such as `10.1002/...` or `10.1111/...`, first navigate to the authenticated Wiley article page, then fetch from that page's own origin:
+
+```text
+<location.origin>/doi/pdfdirect/<doi>?download=true
+```
+
+Do not hardcode `onlinelibrary.wiley.com`: Summon may authenticate through a subdomain such as `advanced.onlinelibrary.wiley.com`, and cross-origin fetches can fail. Also avoid navigating the tab directly to `pdfdirect`, because the browser may start a download and leave the page context unusable. Prefer page-context `fetch()`.
+
+### Springer Nature
+
+For DOI prefixes such as `10.1007/...` and `10.1186/...`:
+
+```text
+https://link.springer.com/content/pdf/<doi>.pdf
+```
+
+This usually works after the institutional login is resolved. Use browser-context fetch if direct shell download returns `401`, `403`, or an HTML login page.
+
+### Nature Communications
+
+For OA DOI patterns such as `10.1038/s41467-...`, try:
+
+```text
+https://www.nature.com/articles/<article-id>.pdf
+```
+
+Extract `<article-id>` from the DOI suffix and still verify the PDF header and text.
+
+### bioRxiv
+
+For DOI prefix `10.1101/...`, try:
+
+```text
+https://www.biorxiv.org/content/<doi>v1.full.pdf
+```
+
+If version 1 returns 404, try the article page or a later version. Verify that the title matches.
+
+### Frontiers
+
+For DOI prefix `10.3389/...`, try:
+
+```text
+https://www.frontiersin.org/articles/<doi>/pdf
+```
+
+If it fails, open the article page first and use its visible PDF link.
+
+### RSC Publishing
+
+For DOI prefix `10.1039/...`, do not assume ZJU has authorized full-text access. If PDF links return 404 or purchase pages, inspect the article page and record `no_authorized_pdf_found` or `purchase_required` rather than retrying aggressively.
 
 ## Publisher Verification and ScienceDirect
 
@@ -157,6 +259,22 @@ When a publisher verification page appears:
 4. Do not click CAPTCHA, Cloudflare, "Are you a robot?", bot-check, or similar challenge controls automatically.
 5. After the user says the verification is complete, continue from the same tab and try the visible article/PDF route once.
 6. If verification immediately reappears, mark `do_not_auto_retry` and move on.
+
+### ScienceDirect / Elsevier Field-Tested Workflow
+
+ScienceDirect can show a "please wait" interstitial after CDP navigation. That page is not always a CAPTCHA. First wait briefly and inspect visible text: only treat it as `sciencedirect_robot_check` when it actually shows "Are you a robot?", CAPTCHA, Cloudflare, or another verification challenge.
+
+For Elsevier papers, a practical workflow is:
+
+1. Resolve institutional access once per browser session. From an article page, use "Access through Zhejiang University" or the Shibboleth handoff to ZJU CAS if needed.
+2. After successful access, authenticated article pages often show `Brought to you by: Zhejiang University Library`.
+3. For a modest manual-attention batch, open the remaining Elsevier DOI/article tabs, then notify the user that those tabs need manual clicks. The user handles interstitials, CAPTCHA, CAS, or "Access through Zhejiang University" buttons.
+4. After the user confirms, scan tabs for article pages containing both `Brought to you by` and `Zhejiang`.
+5. Find the main article `View PDF` link carefully. ScienceDirect pages may contain reference-section `View PDF` links far down the page. Normalize whitespace with `a.textContent.replace(/\s/g, " ").trim() === "View PDF"`, then prefer the link nearest the top toolbar or matching the article PII.
+6. When the user clicks `View PDF`, Chrome may open a new `pdf.sciencedirectassets.com` tab with a time-limited signed PDF URL. Download from that PDF tab with `fetch(location.href, { credentials: "include" })` and close the PDF tab after success.
+7. If the PDF tab returns `Failed to fetch`, the signed URL may have expired. Ask the user to re-click `View PDF` on the article tab.
+
+This is still a human-in-the-loop workflow. Do not automate CAPTCHA, bot checks, or security prompts, and do not open very large ScienceDirect batches.
 
 Create or update `publisher_verification.tsv` when publisher checks interrupt a batch. Use this header:
 
@@ -200,6 +318,13 @@ When a paper reaches a CAS or institutional SSO page:
 9. If resolved, download and verify the PDF/SI, then update the manifest status to `downloaded` or `downloaded_with_si`.
 10. If it loops back to CAS after a completed user login, record `failed_after_retry` with the observed reason and move on.
 
+Known ZJU CAS details observed during use:
+
+- The CAS page may be on `zjuam.zju.edu.cn`.
+- Common fields include `id="username"`, `id="password"`, and sometimes `id="authcode"`.
+- The `authcode` field is a manual verification step; do not attempt to solve or fill it.
+- Chrome does not reliably expose or autofill ZJU CAS credentials in a way the agent can depend on. If the login button click does not advance within about 15 seconds, stop and let the user finish the login manually.
+
 ### Safe CAS Auto-Confirm
 
 The agent may click a ZJU CAS saved-login confirmation button only when all conditions are true:
@@ -232,6 +357,18 @@ mark_no_authorized_pdf
 
 For a CAS retry batch, process one or a few tabs at a time. Do not open many CAS/login tabs in parallel; it can confuse the user's session and increase publisher or SSO risk.
 
+## User Notification
+
+When the user needs to intervene for CAS login, CAPTCHA, publisher verification, or expired ScienceDirect PDF links, give a clear chat update and, when a local notification helper exists, use it to get the user's attention.
+
+Known local helper used during testing:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "D:\claude+codexwork\notify.ps1" "Title" "Message text"
+```
+
+If the helper is absent, continue with normal chat updates. Do not make notifications a hard dependency of the skill.
+
 ## Download PDF From Browser Context
 
 Use the bundled script when a PDF URL opens in Chrome but direct shell download returns `403`, `401`, Cloudflare HTML, or a login page.
@@ -262,6 +399,29 @@ Useful options:
 --allow-non-pdf      Save even when content does not start with %PDF
 ```
 
+### Page-Context Fetch Pattern
+
+For cases where the bundled script is not flexible enough, use the same idea directly in the authenticated tab:
+
+```javascript
+const init = await proxyEval(targetId, `(async()=>{
+  const r = await fetch("${pdfUrl}", { credentials: "include" });
+  const ab = await r.arrayBuffer();
+  window.__zjuPdfBytes = new Uint8Array(ab);
+  return {
+    ok: r.ok,
+    ct: r.headers.get("content-type"),
+    n: window.__zjuPdfBytes.length,
+    head: Array.from(window.__zjuPdfBytes.slice(0, 8))
+  };
+})()`);
+
+const head = Buffer.from(init.value.head).toString("ascii");
+if (!head.startsWith("%PDF")) throw new Error("Not a PDF response");
+```
+
+Then transfer `window.__zjuPdfBytes` in chunks through `/eval`. This pattern is useful for Wiley same-origin `pdfdirect` links and ScienceDirect signed PDF tabs.
+
 ## Supporting Information
 
 Always try to download supporting information when the user wants complete reading.
@@ -276,6 +436,8 @@ Preferred method:
    - `/doi/suppl/`
    - `/suppl_file/`
    - `_si_`
+   - `_mmc`
+   - `appendix`
 3. Download every PDF/DOCX/XLSX/video/data file that is clearly a legitimate supplement, using the browser context if needed.
 
 ACS fallback pattern, only after verifying the DOI and article page:
@@ -292,6 +454,8 @@ https://pubs.acs.org/doi/suppl/10.1021/acs.biomac.4c00102/suppl_file/bm4c00102_s
 
 Do not invent supplement URLs as facts. If a guessed URL returns 404, record "not found" and inspect the article page.
 
+For Elsevier/ScienceDirect, supporting files may use `_mmc` naming or appear as multimedia components on the article page. For RSC, supporting links often contain `suppdata`, but the main PDF may still be unavailable through institutional access.
+
 ## Verification and Reading
 
 After downloading, verify every file.
@@ -306,6 +470,8 @@ python -X utf8 "$env:USERPROFILE\.claude\skills\zju-literature-downloader\script
 ```
 
 This should report page count and extracted text. The script also reconfigures stdout/stderr to UTF-8 internally to reduce Windows GBK failures. If extraction fails but the PDF is valid, try PyMuPDF, OCR, or the local `pdf` skill.
+
+On Windows, always set `PYTHONUTF8=1` and use `python -X utf8` when extracting text. If console text still displays poorly, check the JSON or metadata output first; the PDF may be valid even when terminal rendering is not.
 
 Minimum verification checklist:
 
@@ -327,6 +493,8 @@ Use readable filenames:
 FirstAuthor_Year_Journal_short-title.pdf
 FirstAuthor_Year_Journal_short-title_SI.pdf
 ```
+
+If filenames are Chinese-friendly, prefix supplements with `补充_` or otherwise make SI files visually distinct from main papers.
 
 For project work, keep a folder like:
 
@@ -389,6 +557,21 @@ If the session expires:
 
 - Ask the user to log in again through WebVPN.
 
+Common pitfalls:
+
+| Problem | Likely cause | Practical fix |
+|---------|--------------|---------------|
+| Summon opens `about:blank` | `#!` fragment stripped | Use `scripts/cdp_open_url.mjs` or `/navigate` with a fully encoded URL |
+| First Summon online-full-text link does nothing | Empty `href` facet toggle | Skip empty links and retry after SPA rendering |
+| Serials Solutions says IP is outside authorized range | CDP Chrome traffic is off-campus | Ask user to use RVPN/SSLVPN or another authorized network route |
+| CAS auto-click does not work | Credentials not filled, authcode present, or login loop | Stop after one authorized click and ask the user to finish manually |
+| Wiley fetch returns an empty object or CORS error | Wrong Wiley origin | Fetch `location.origin + "/doi/pdfdirect/<doi>?download=true"` from the authenticated article page |
+| ScienceDirect `View PDF` opens the wrong article | Reference-section PDF link selected | Normalize whitespace and choose the top toolbar/main-article link |
+| `pdf.sciencedirectassets.com` fetch fails | Signed S3 URL expired | Ask user to re-click `View PDF` |
+| RSC PDF URL returns 404 or purchase page | No authorized access | Record `no_authorized_pdf_found` or `purchase_required` |
+| Node `require()` fails inside `.mjs` | ES module context | Use `import` syntax |
+| Python text extraction prints garbled Chinese | Windows console encoding | Use `PYTHONUTF8=1` and `python -X utf8` |
+
 ## Verified Test Case
 
 This workflow was verified with:
@@ -398,3 +581,10 @@ This workflow was verified with:
 - Source route: ZJU Summon `PDF` link -> ACS PDF page
 - Output: main PDF and ACS supporting information PDF
 - Verification: main PDF 17 pages, SI PDF 31 pages, both text-readable.
+
+Additional field-tested cases recorded from later use:
+
+- Wiley same-origin PDF fetch: DOI `10.1002/adhm.202405260`.
+- Nature Communications OA direct PDF: DOI pattern `10.1038/s41467-...`.
+- Springer direct PDF after CAS/institutional access: DOI pattern `10.1007/...`.
+- ScienceDirect / Elsevier: Shibboleth plus user-handled verification, then download from `pdf.sciencedirectassets.com` tabs.
