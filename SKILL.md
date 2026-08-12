@@ -67,7 +67,9 @@ Classify every paper into one of these statuses, and keep the status in the mani
 ```text
 downloaded
 downloaded_with_si
+si_only_downloaded
 cas_waiting_user
+institutional_login_waiting_user
 cas_resolved_retry_needed
 publisher_verification_waiting_user
 sciencedirect_robot_check
@@ -75,6 +77,8 @@ retry_after_user_verification
 do_not_auto_retry
 url_needs_repair
 summon_no_link
+summon_unreachable
+browser_pdf_viewer_fallback_needed
 publisher_blocked_waiting_user
 no_authorized_pdf_found
 failed_after_retry
@@ -82,7 +86,11 @@ ip_not_authorized
 purchase_required
 ```
 
-Use `cas_waiting_user` only when the browser is visibly at Zhejiang University CAS / unified identity authentication or an equivalent institutional SSO step. Do not treat this as a final failure.
+Use `cas_waiting_user` when the browser is visibly at Zhejiang University CAS / unified identity authentication. Use `institutional_login_waiting_user` when the paper is still at an institution selector, CARSI/Shibboleth/OpenAthens handoff, or equivalent SSO step before CAS. Both are non-final states; keep `cas_waiting_user` for backward-compatible manifests.
+
+Use `si_only_downloaded` when one or more official supporting-information files were verified but the main article PDF remains unavailable through the user's authorized access. Do not call this `downloaded`.
+
+Use `summon_unreachable` when the Summon SPA repeatedly returns `ERR_EMPTY_RESPONSE` or cannot load after a single fresh retry. Use `browser_pdf_viewer_fallback_needed` when Chrome visibly displays the PDF but browser-context `fetch()` cannot retrieve its bytes. Neither status means the paper is unavailable; both specify the next legitimate fallback.
 
 Use `publisher_verification_waiting_user` or `sciencedirect_robot_check` when a publisher page shows "Are you a robot?", CAPTCHA, Cloudflare, bot verification, or another anti-automation challenge. Do not treat this as a final failure, but do not try to solve it automatically.
 
@@ -163,6 +171,7 @@ When extracting `PDF`, online full text, or publisher links from Summon:
 2. Treat Summon as a slow SPA: wait about 6 seconds after navigation, then retry link extraction up to 3 times with short pauses.
 3. If Summon redirects to `login.serialssolutions.com/sso/login` and says the IP is outside the authorized range, record `ip_not_authorized`. In that case the user may need the ZJU RVPN/SSLVPN client, not only WebVPN in a browser page, because CDP-controlled Chrome tabs may still use the local network IP.
 4. If Summon has no PDF but has an online-full-text link, follow that route before constructing a publisher URL manually.
+5. If the page consistently shows `ERR_EMPTY_RESPONSE` or fails to render after one fresh navigation and the normal SPA waits, record `summon_unreachable`. Do not loop on Summon: try the DOI's publisher landing page or a confirmed OA route once, still using the user's authorized browser session where required.
 
 ## Publisher-Specific Patterns
 
@@ -183,6 +192,10 @@ https://pubs.acs.org/doi/suppl/<doi>/suppl_file/<journal-code>_si_001.pdf
 ```
 
 The verified example `10.1021/acs.biomac.4c00102` used `bm4c00102_si_001.pdf`.
+
+Start from the ACS article landing page whenever possible. A short Chinese `请稍候...` interstitial can clear by itself; wait about 5-10 seconds and inspect the page once before classifying it as a publisher challenge. A readable abstract page does not prove that the main PDF is authorized: if it still shows `Available to Purchase` or `Access through Institution`, record the appropriate institutional-login or purchase status and leave any sign-in selection for the user.
+
+ACS supporting-information links shown on the article page may legitimately lead to ACS Figshare / `ndownloader.figstatic.com` downloads even when the main PDF is not authorized. Follow visible official links, verify the resulting SI PDF, and record `si_only_downloaded` until the main article is also verified. Do not guess a supplement filename beyond an article-page link, and do not treat accessible SI as permission to retrieve the paywalled main paper.
 
 ### Wiley
 
@@ -399,6 +412,20 @@ Useful options:
 --allow-non-pdf      Save even when content does not start with %PDF
 ```
 
+### Chrome Download Fallback
+
+The helper is for an authenticated HTML/PDF page that exposes bytes to page-context `fetch()`. It can fail with an empty result or a browser fetch error when Chrome has opened its native PDF viewer, even though the user can read the PDF in that tab. This is a browser-viewer limitation, not an access verdict.
+
+When that happens:
+
+1. Mark `browser_pdf_viewer_fallback_needed`; do not retry the same viewer URL in a loop.
+2. Return to the article landing page and use the visible official `Download PDF` / `View PDF` action once.
+3. Wait for the normal Chrome download to finish. Ignore `.crdownload` files.
+4. Identify the new file by its modification time, plausible size, `%PDF` signature, and extracted title/DOI; never copy the first matching PDF merely because filenames can acquire `(1)` suffixes.
+5. Copy or move the verified file to `PDFs/`, then update the manifest. If the landing page requests institutional login or a security challenge, pause on that page for the user instead.
+
+If a direct `curl`/`Invoke-WebRequest` attempt fails with `403`, HTML content, or Windows `CRYPT_E_REVOCATION_OFFLINE`, do not weaken TLS revocation checks to force a download. Use the normal browser landing-page route above.
+
 ### Page-Context Fetch Pattern
 
 For cases where the bundled script is not flexible enough, use the same idea directly in the authenticated tab:
@@ -519,7 +546,8 @@ If direct publisher navigation triggers ScienceDirect "Are you a robot?", Cloudf
 
 If shell `Invoke-WebRequest` or `curl` returns 403 but the PDF opens in Chrome:
 
-- Use `browser_pdf_downloader.mjs`; this is the normal institutional-access case.
+- First use `browser_pdf_downloader.mjs` from an authenticated HTML/PDF page.
+- If the script reports a Chrome PDF-viewer fetch limitation, use the article page's visible `Download PDF` control and verify the browser download. Do not conclude that access failed from the helper error alone.
 
 If a page shows publisher bot verification, CAPTCHA, Cloudflare, QR login, SMS/OTP, or another security challenge:
 
@@ -568,6 +596,10 @@ Common pitfalls:
 | Wiley fetch returns an empty object or CORS error | Wrong Wiley origin | Fetch `location.origin + "/doi/pdfdirect/<doi>?download=true"` from the authenticated article page |
 | ScienceDirect `View PDF` opens the wrong article | Reference-section PDF link selected | Normalize whitespace and choose the top toolbar/main-article link |
 | `pdf.sciencedirectassets.com` fetch fails | Signed S3 URL expired | Ask user to re-click `View PDF` |
+| Summon shows `ERR_EMPTY_RESPONSE` | Summon SPA/network route is unavailable to the controlled tab | Record `summon_unreachable`; fall back once to the DOI landing page or confirmed OA route |
+| `browser_pdf_downloader.mjs` reports an empty browser fetch | Chrome native PDF viewer does not expose bytes to page-context fetch | Use the article page's visible download action, then verify the completed Chrome download |
+| `curl` reports `CRYPT_E_REVOCATION_OFFLINE` | Windows cannot check certificate revocation from that shell route | Do not disable revocation checking; use Chrome's official download action |
+| ACS main PDF is purchase-only but SI downloads | SI is publicly served; main article remains paywalled | Save and verify SI, record `si_only_downloaded`, and keep main-PDF status separate |
 | RSC PDF URL returns 404 or purchase page | No authorized access | Record `no_authorized_pdf_found` or `purchase_required` |
 | Node `require()` fails inside `.mjs` | ES module context | Use `import` syntax |
 | Python text extraction prints garbled Chinese | Windows console encoding | Use `PYTHONUTF8=1` and `python -X utf8` |

@@ -32,6 +32,8 @@ A Codex/Claude skill for legally downloading, retrying, and reading academic PDF
 - A DOI/title list needs small-batch PDF and supporting information collection.
 - CAS SSO interrupts a batch and the failed papers need to be retried after the user manually authenticates in Chrome.
 - ScienceDirect or publisher verification interrupts a batch and needs manual browser handoff before retrying the same tab.
+- A legitimate Chrome download works while a raw PDF URL returns 403, an HTML page, or a Windows certificate-revocation error.
+- An ACS main article is restricted but its official supporting information is separately downloadable and must be tracked as SI-only rather than a completed paper.
 - The user wants a manifest recording DOI, source URL, download status, SI status, and local paths.
 - PDFs need to be verified before an agent reads, summarizes, or cites them.
 - Zotero can import metadata, but the user still wants local project-folder PDFs.
@@ -216,6 +218,30 @@ $node = "$env:LOCALAPPDATA\OpenAI\Codex\bin\node.exe"
   --close
 ```
 
+## Field-Tested Fallbacks
+
+### Chrome PDF viewer is readable, but the helper says `Browser fetch failed`
+
+This is not automatically an access failure. Chrome's built-in PDF viewer can display a file while refusing page-context `fetch()` access to the viewer URL.
+
+1. Return to the publisher article landing page.
+2. Click its normal visible `Download PDF` or `View PDF` button once.
+3. Wait for the browser download to finish; do not use a `.crdownload` file.
+4. Verify the candidate by `%PDF` signature, nonzero page count, and extracted title/DOI before copying it to `PDFs/`.
+5. Match recent downloads by modification time and content, not merely by filename: Chrome may add `(1)` to a duplicate filename.
+
+If `curl`/`Invoke-WebRequest` returns `403`, HTML, or Windows `CRYPT_E_REVOCATION_OFFLINE`, switch to this browser path. Do not disable TLS revocation checking merely to make a shell transfer work.
+
+### Summon does not load
+
+Summon is a slow SPA and needs a short settle period. Retry the rendered page a few times after navigation. If a fresh navigation still yields `ERR_EMPTY_RESPONSE`, record `summon_unreachable` and try the DOI's publisher landing page or a confirmed open-access route once. A WebVPN tab does not guarantee that every new controlled tab receives the same library network route.
+
+### ACS: distinguish article access from supporting information
+
+An ACS abstract page may be readable while the main PDF remains `Available to Purchase` or asks for `Access through Institution`. A brief `请稍候...` page can resolve naturally; wait 5-10 seconds and inspect it once before treating it as a security challenge. For a genuine institution selector, CARSI/Shibboleth/OpenAthens, CAS, CAPTCHA, or publisher verification, stop on that page for the user.
+
+Official ACS supporting-information links on the article page can lead to ACS Figshare / `ndownloader.figstatic.com`. Those files may be legally accessible even when the main PDF is not. Verify and save them, but classify the record as `si_only_downloaded` until the main PDF is also verified.
+
 Extract and verify PDF text:
 
 ```powershell
@@ -234,6 +260,17 @@ id	title	doi	year	venue	status	pdf_path	si_status	si_paths	source_url	notes
 ```
 
 Keep the batch small and auditable. Stop when login, CAPTCHA, WebVPN expiry, publisher security checks, or suspicious download prompts appear.
+
+Useful statuses beyond `downloaded` and `downloaded_with_si`:
+
+```text
+si_only_downloaded
+institutional_login_waiting_user
+summon_unreachable
+browser_pdf_viewer_fallback_needed
+```
+
+These are progress states, not generic failures. They preserve exactly what was obtained and the next lawful action.
 
 For CAS retries, use the richer template in `examples/cas-retry-template.tsv`.
 

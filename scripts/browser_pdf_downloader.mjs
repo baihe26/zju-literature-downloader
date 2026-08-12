@@ -8,7 +8,12 @@ function usage() {
   node browser_pdf_downloader.mjs --target <targetId> --out <file.pdf> [--proxy http://127.0.0.1:3456]
 
 Downloads a PDF through an already-authenticated Chrome page controlled by the web-access CDP proxy.
-It does not bypass logins, CAPTCHA, Cloudflare, paywalls, or publisher restrictions.`);
+It does not bypass logins, CAPTCHA, Cloudflare, paywalls, or publisher restrictions.
+
+If Chrome has opened its built-in PDF viewer and the browser cannot fetch the viewer URL,
+return to the article landing page, click its normal Download PDF button, then verify the
+completed file in the browser Downloads folder. A viewer-fetch failure is not evidence that
+the user lacks access.`);
 }
 
 function parseArgs(argv) {
@@ -112,25 +117,43 @@ async function main() {
 
   const initJs = `(
     async () => {
-      const r = await fetch(location.href, { credentials: "include" });
-      const ct = r.headers.get("content-type") || "";
-      const ab = await r.arrayBuffer();
-      window.__zjuLiteratureDownloaderBytes = new Uint8Array(ab);
-      return {
-        ok: r.ok,
-        status: r.status,
-        contentType: ct,
-        size: window.__zjuLiteratureDownloaderBytes.length,
+      const viewer = {
         url: location.href,
-        head: Array.from(window.__zjuLiteratureDownloaderBytes.slice(0, 8))
+        documentContentType: document.contentType || "",
+        title: document.title || "",
+        hasPdfEmbed: Boolean(document.querySelector('embed[type="application/pdf"], iframe[src*=".pdf"]'))
       };
+      try {
+        const r = await fetch(location.href, { credentials: "include" });
+        const ct = r.headers.get("content-type") || "";
+        const ab = await r.arrayBuffer();
+        window.__zjuLiteratureDownloaderBytes = new Uint8Array(ab);
+        return {
+          ok: r.ok,
+          status: r.status,
+          contentType: ct,
+          size: window.__zjuLiteratureDownloaderBytes.length,
+          url: location.href,
+          head: Array.from(window.__zjuLiteratureDownloaderBytes.slice(0, 8)),
+          ...viewer
+        };
+      } catch (error) {
+        return { ok: false, fetchError: String(error), ...viewer };
+      }
     }
   )()`;
 
   const init = await proxyEval(args.proxy, target, initJs, 120000);
   const meta = init.value;
   if (!meta || !meta.ok) {
-    throw new Error(`Browser fetch failed: ${JSON.stringify(meta)}`);
+    const observed = JSON.stringify(meta || {}).slice(0, 1000);
+    throw new Error(
+      "Browser page-context fetch did not return PDF bytes. This does not establish an access failure. " +
+      "If this tab is Chrome's built-in PDF viewer, return to the article landing page, click its visible " +
+      "Download PDF/View PDF control, wait for the normal browser download to finish, then validate the file " +
+      "in Downloads by %PDF signature and title/DOI. If the landing page instead asks for CAS, institution " +
+      "selection, CAPTCHA, or publisher verification, leave that page for the user. Observed: " + observed
+    );
   }
 
   const headAscii = Buffer.from(meta.head || []).toString("ascii");
