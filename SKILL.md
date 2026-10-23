@@ -21,9 +21,13 @@ Exception for ZJU CAS saved-login pages: if the user explicitly says that Chrome
 
 Do not inspect or export cookies, passwords, local storage, browser profiles, or session files. Use the browser's already-authenticated page context only.
 
-## Preconditions
+## Capability Check Before Downloads
 
-Before attempting downloads, confirm these conditions:
+For a resumed batch, a stalled PDF, an unavailable control tool, or a `View PDF` redirect loop, first read [references/browser-download-recovery.md](references/browser-download-recovery.md). Establish current capabilities before requesting repeated user action.
+
+The following describes the existing Chrome/CDP-proxy route, not universal prerequisites. Prefer the host's supported browser/download tools when they can use the user's authorized session and chosen destination. Do not install or expose a debugging endpoint just because this checklist mentions one.
+
+For the Chrome/CDP-proxy route, confirm these conditions:
 
 1. Chrome is open on the user's machine.
 2. The user has personally logged in to Zhejiang University Library / WebVPN in Chrome.
@@ -68,6 +72,12 @@ Classify every paper into one of these statuses, and keep the status in the mani
 downloaded
 downloaded_with_si
 si_only_downloaded
+pdf_loading
+pdf_visible_unsaved
+saved_pending_verification
+identity_mismatch
+browser_control_unavailable
+host_execution_denied
 cas_waiting_user
 institutional_login_waiting_user
 cas_resolved_retry_needed
@@ -89,6 +99,8 @@ purchase_required
 Use `cas_waiting_user` when the browser is visibly at Zhejiang University CAS / unified identity authentication. Use `institutional_login_waiting_user` when the paper is still at an institution selector, CARSI/Shibboleth/OpenAthens handoff, or equivalent SSO step before CAS. Both are non-final states; keep `cas_waiting_user` for backward-compatible manifests.
 
 Use `si_only_downloaded` when one or more official supporting-information files were verified but the main article PDF remains unavailable through the user's authorized access. Do not call this `downloaded`.
+
+`pdf_loading`, `pdf_visible_unsaved`, and `saved_pending_verification` are progress states, not completed downloads. Use `identity_mismatch` for a saved file belonging to another article/asset. Keep `browser_control_unavailable` and `host_execution_denied` separate from login/publisher challenges: record the observed failing operation and leave its unknown cause unknown. Maintain SI inventory/completeness separately from the main status.
 
 Use `summon_unreachable` when the Summon SPA repeatedly returns `ERR_EMPTY_RESPONSE` or cannot load after a single fresh retry. Use `browser_pdf_viewer_fallback_needed` when Chrome visibly displays the PDF but browser-context `fetch()` cannot retrieve its bytes. Neither status means the paper is unavailable; both specify the next legitimate fallback.
 
@@ -123,9 +135,10 @@ Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:3456/targets" -Timeout
 
 If this hangs or fails:
 
-- Ask the user to confirm the remote debugging checkbox.
-- Check `%TEMP%\cdp-proxy.log`.
-- Do not attempt to read Chrome session files.
+- Inspect the current tool error and existing proxy health/log evidence first. A connection failure does not establish that the remote-debugging checkbox is off or the library session expired.
+- Ask the user to check a specific setting only when current evidence points to it; reuse prior confirmation within its scope.
+- Read an existing proxy log if relevant, but put new logs and temporary output in the user's approved destination, not an unapproved default temporary directory.
+- Do not attempt to read Chrome session files or retry a host-denied operation through another interface.
 
 ## Core CDP Proxy API
 
@@ -258,8 +271,8 @@ ScienceDirect and some publisher platforms may show "Are you a robot?", CAPTCHA,
 Reduce the chance of triggering them by using a conservative access pattern:
 
 1. Prefer ZJU Summon / WebVPN / library `在线全文` links before direct `doi.org -> publisher` navigation.
-2. Process ScienceDirect and other sensitive publishers one article at a time.
-3. Keep a visible audit trail in the manifest; do not open many publisher tabs in parallel.
+2. Process automatic downloads conservatively and respect publisher terms; use approved APIs where automation is not permitted.
+3. Keep a visible audit trail. For a user-requested modest human-attention batch, a few remaining article pages may be opened sequentially; avoid request bursts, duplicate tabs, and multiple concurrent SSO flows. A challenge stops automated activity on that page, not unrelated permitted work.
 4. Wait for each page to settle before looking for `Download PDF`, `View PDF`, or `PDF`.
 5. Reuse the same tab after the user completes a verification step instead of opening repeated new tabs.
 6. Avoid retry loops. One failed automatic attempt is enough before handing the page to the user.
@@ -284,8 +297,8 @@ For Elsevier papers, a practical workflow is:
 3. For a modest manual-attention batch, open the remaining Elsevier DOI/article tabs, then notify the user that those tabs need manual clicks. The user handles interstitials, CAPTCHA, CAS, or "Access through Zhejiang University" buttons.
 4. After the user confirms, scan tabs for article pages containing both `Brought to you by` and `Zhejiang`.
 5. Find the main article `View PDF` link carefully. ScienceDirect pages may contain reference-section `View PDF` links far down the page. Normalize whitespace with `a.textContent.replace(/\s/g, " ").trim() === "View PDF"`, then prefer the link nearest the top toolbar or matching the article PII.
-6. When the user clicks `View PDF`, Chrome may open a new `pdf.sciencedirectassets.com` tab with a time-limited signed PDF URL. Download from that PDF tab with `fetch(location.href, { credentials: "include" })` and close the PDF tab after success.
-7. If the PDF tab returns `Failed to fetch`, the signed URL may have expired. Ask the user to re-click `View PDF` on the article tab.
+6. When the user clicks `View PDF`, Chrome may open a new `pdf.sciencedirectassets.com` tab with a time-limited signed PDF URL. Where permitted, use the supported authenticated save/download route; page-context fetch is only one option and can fail in the native viewer. Verify the saved file before closing a task-owned tab no longer needed for SI.
+7. `Failed to fetch` alone does not identify an expired URL: viewer restrictions, loading, network routing, and access checks are also possible. Inspect the observed page/error once and use the recovery reference; do not automatically ask the user to re-click or log in again.
 
 This is still a human-in-the-loop workflow. Do not automate CAPTCHA, bot checks, or security prompts, and do not open very large ScienceDirect batches.
 
@@ -372,15 +385,7 @@ For a CAS retry batch, process one or a few tabs at a time. Do not open many CAS
 
 ## User Notification
 
-When the user needs to intervene for CAS login, CAPTCHA, publisher verification, or expired ScienceDirect PDF links, give a clear chat update and, when a local notification helper exists, use it to get the user's attention.
-
-Known local helper used during testing:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "D:\claude+codexwork\notify.ps1" "Title" "Message text"
-```
-
-If the helper is absent, continue with normal chat updates. Do not make notifications a hard dependency of the skill.
+When intervention is actually needed, identify the paper, current visible page title, browser/window, and exact human action. Use a supported local notification helper only if available and authorized; ordinary chat is sufficient. Do not claim the user can see a page merely because an open-URL command returned success. Do not make a machine-specific helper a dependency.
 
 ## Download PDF From Browser Context
 
@@ -420,9 +425,9 @@ When that happens:
 
 1. Mark `browser_pdf_viewer_fallback_needed`; do not retry the same viewer URL in a loop.
 2. Return to the article landing page and use the visible official `Download PDF` / `View PDF` action once.
-3. Wait for the normal Chrome download to finish. Ignore `.crdownload` files.
+3. Wait for the normal Chrome download to finish in the approved destination. Configure that location before the download; do not silently fall back to the system Downloads folder. Ignore `.crdownload` and other incomplete files.
 4. Identify the new file by its modification time, plausible size, `%PDF` signature, and extracted title/DOI; never copy the first matching PDF merely because filenames can acquire `(1)` suffixes.
-5. Copy or move the verified file to `PDFs/`, then update the manifest. If the landing page requests institutional login or a security challenge, pause on that page for the user instead.
+5. Copy the verified file to the requested final folder by default, preserving originals. Move only if authorized. Update the manifest; if the landing page requests institutional login or a security challenge, leave that page for the user instead.
 
 If a direct `curl`/`Invoke-WebRequest` attempt fails with `403`, HTML content, or Windows `CRYPT_E_REVOCATION_OFFLINE`, do not weaken TLS revocation checks to force a download. Use the normal browser landing-page route above.
 
@@ -483,6 +488,8 @@ Do not invent supplement URLs as facts. If a guessed URL returns 404, record "no
 
 For Elsevier/ScienceDirect, supporting files may use `_mmc` naming or appear as multimedia components on the article page. For RSC, supporting links often contain `suppdata`, but the main PDF may still be unavailable through institutional access.
 
+Inventory SI by asset, not just paper. Retain the publisher label and original filename, distinguish experimental SI/source data from data-availability metadata, and validate the actual format. Keep documents/tables/images, large video/media, and archives separate when requested, retaining each paper identifier. Small files are not automatically invalid. Missing links in one extraction mean SI completeness is unknown, not that no SI exists.
+
 ## Verification and Reading
 
 After downloading, verify every file.
@@ -505,8 +512,9 @@ Minimum verification checklist:
 - File exists and size is plausible.
 - First bytes are `%PDF` for PDF files.
 - Page count is nonzero.
-- Extracted text includes the article title, abstract, or supporting information title.
-- Save a small manifest with DOI, title, source URL, download date, and supplement status when doing more than one paper.
+- Identity matches the intended main article or supplement. A matching DOI in a bibliography alone is insufficient; inspect title-area text or verify visually/OCR when needed.
+- Save a small manifest with DOI, title, canonical source URL, local path, verification result/date, and separate main/SI states when doing more than one paper. Do not log signed PDF query strings.
+- `downloaded` requires a saved verified main PDF; `downloaded_with_si` additionally requires all known requested SI. Preserve unknown SI completeness and keep SI-only progress separate.
 
 ## Zotero
 
@@ -595,7 +603,7 @@ Common pitfalls:
 | CAS auto-click does not work | Credentials not filled, authcode present, or login loop | Stop after one authorized click and ask the user to finish manually |
 | Wiley fetch returns an empty object or CORS error | Wrong Wiley origin | Fetch `location.origin + "/doi/pdfdirect/<doi>?download=true"` from the authenticated article page |
 | ScienceDirect `View PDF` opens the wrong article | Reference-section PDF link selected | Normalize whitespace and choose the top toolbar/main-article link |
-| `pdf.sciencedirectassets.com` fetch fails | Signed S3 URL expired | Ask user to re-click `View PDF` |
+| `pdf.sciencedirectassets.com` fetch fails | Cause not established by the fetch error alone | Inspect loading/viewer/access/network evidence; use the supported normal save route, not a repeated login/re-click loop |
 | Summon shows `ERR_EMPTY_RESPONSE` | Summon SPA/network route is unavailable to the controlled tab | Record `summon_unreachable`; fall back once to the DOI landing page or confirmed OA route |
 | `browser_pdf_downloader.mjs` reports an empty browser fetch | Chrome native PDF viewer does not expose bytes to page-context fetch | Use the article page's visible download action, then verify the completed Chrome download |
 | `curl` reports `CRYPT_E_REVOCATION_OFFLINE` | Windows cannot check certificate revocation from that shell route | Do not disable revocation checking; use Chrome's official download action |
