@@ -2,28 +2,22 @@
 
 A Codex/Claude skill for legally downloading, retrying, and reading academic PDFs through the user's own logged-in Zhejiang University Library / WebVPN / Summon / publisher browser session.
 
-中文简介：这是一个面向浙大图书馆/WebVPN 场景的文献下载、失败重试与全文读取 skill。它使用用户自己已经登录的 Chrome 会话，在授权范围内保存 PDF 和 supporting information，并对文件做页数、PDF 签名和文本可读性验证。适合“网页里能打开 PDF，但命令行下载 403/401/登录页”“CAS SSO 中断批量下载”“ScienceDirect/出版商人机验证后需要继续同一页下载”的情况。
+中文简介：这是一个面向浙大图书馆/WebVPN 场景的文献下载、失败重试与全文读取 skill。它使用宿主支持、用户授权的已登录浏览器会话，在授权范围内保存 PDF 和 supporting information，并对文件做页数、PDF 签名和文本可读性验证。适合“网页里能打开 PDF，但命令行下载 403/401/登录页”“CAS SSO 中断批量下载”“ScienceDirect/出版商人机验证后需要继续同一页下载”的情况。
 
 中文快速使用教程：
 
-1. 先在自己的 Chrome 里打开浙大图书馆或 WebVPN，并用自己的账号登录。
-   - 常用入口：`https://libweb.zju.edu.cn/`
-   - WebVPN：`https://webvpn.zju.edu.cn/`
-   - 求是学术搜索 / Summon：`https://zju.summon.serialssolutions.com/`
-2. 确认这个 Chrome 里能正常访问目标文献页面，最好能手动打开一次 PDF 或“在线全文”。
-3. 在 Chrome 地址栏打开 `chrome://inspect/#remote-debugging`，勾选 `Allow remote debugging for this browser instance`。
-4. 告诉 Codex/Claude 你的文献清单，例如 DOI、题目或 PMID，并说明输出文件夹。
-5. agent 会通过你已经登录的 Chrome 会话检索、打开 PDF、保存主文和补充材料，并生成下载记录。
-6. 如果网页要求验证码、Cloudflare、人机验证、扫码、短信/OTP 或二次认证，需要你本人在 Chrome 里完成；agent 不绕过这些验证，也不自动点击出版商的人机验证。
-7. 推荐小批量使用：一次 5-10 篇比较稳，最多 15-20 篇，并保留 manifest 记录。不要用它批量扫关键词结果、整期杂志或大量连续下载。
-8. 如果 Claude Code 没有自动识别这个 skill，把仓库安装到 `%USERPROFILE%\.claude\skills\zju-literature-downloader`，然后重启或刷新 Claude Code。
-9. 如果遇到浙大统一身份认证 / CAS SSO，不要把账号密码发给 agent。若 Chrome 已经自动填好账号密码，你可以明确授权 agent 只点一次“登录/确认登录”；若出现扫码、短信/OTP、验证码、人机验证或安全提示，则需要你自己在 Chrome 里完成。
-10. 如果遇到 ScienceDirect 的 `Are you a robot?` 或其它出版商验证，让 agent 停在当前 tab，自己手动完成验证后再让 agent 从同一个页面继续。不要让 agent 反复刷新、随机点击或并发打开很多页。
+1. 安装本 skill，提供明确的 DOI、题目或 PMID 清单，以及已同意的输出文件夹。
+2. 先让 agent 检查宿主实际支持的浏览器控制、下载与文件验证能力，确认它能使用你选择并授权的浏览器会话。需要机构访问时，由你在该浏览器中登录浙大图书馆或 WebVPN。
+   - 图书馆：`https://libweb.zju.edu.cn/`；WebVPN：`https://webvpn.zju.edu.cn/`；Summon：`https://zju.summon.serialssolutions.com/`。
+3. 如果现有能力可用，按宿主支持的方式检索并保存，不必额外配置 CDP。仅在选择下方 Chrome/CDP 方案时，才检查其专属依赖。
+4. 页面要求 CAS、验证码、扫码、短信/OTP 或出版商验证时，在实际打开的页面由你本人完成；不要发送密码或验证码。仅当已满足安全边界，且你明确授权时，agent 可点击一次已自动填好凭据的浙大 CAS 登录/确认按钮。
+5. agent 逐项验证保存文件并记录主文及补充材料状态。页面能打开或显示 PDF 并不等于文件已保存、验证成功。
+6. 建议小批量处理确定的文献清单；遇到控制、保存或验证问题时，根据实际证据报告，参见 [浏览器下载恢复指南](references/browser-download-recovery.md)。不要批量扫整期杂志或反复重试验证页面。
 
 可以这样对 agent 说：
 
 ```text
-请使用 zju-literature-downloader，通过我已经登录的浙大图书馆/WebVPN Chrome 会话，下载下面这些 DOI 的 PDF 和补充材料，并生成 manifest。
+请使用 zju-literature-downloader，通过我授权的、已登录浙大图书馆/WebVPN 的浏览器会话，下载下面这些 DOI 的 PDF 和补充材料，并生成 manifest。
 ```
 
 ## What It Solves
@@ -50,15 +44,16 @@ Small batches are supported when the user provides a definite DOI/title/PMID lis
 
 ## Preconditions
 
-Before using the skill:
+General requirements:
 
-1. Chrome is open.
-2. The user has personally logged in to Zhejiang University Library / WebVPN / Summon in Chrome.
-3. Chrome remote debugging is enabled at `chrome://inspect/#remote-debugging`.
-4. The user has checked `Allow remote debugging for this browser instance`.
-5. Node.js 22+ is available, or the Codex bundled Node runtime is available.
-6. The `web-access-main` CDP proxy skill is installed.
-7. The user has approved the target output folder.
+1. A specific paper list and a user-approved output destination.
+2. Legitimate access to the requested content, with the user completing institutional or publisher authentication where required.
+3. A host-supported, permitted way to inspect/control the selected authorized browser session and save files to the chosen destination; a way to verify file type, readability and identity is also needed. Check each capability independently before relying on it. An open URL, a visible PDF, or a listening port does not prove control or a verified download.
+4. If control or saving is unavailable, report the observed limitation and use the supported human handoff where possible. Do not infer expired login or evade a host denial. See [browser download recovery](references/browser-download-recovery.md).
+
+### Optional Chrome / CDP proxy route
+
+Only when choosing the documented web-access CDP route, its requirements include a user-authorized Chrome session, Chrome remote debugging allowed for that instance (`chrome://inspect/#remote-debugging`), Node.js 22+ or a suitable bundled runtime, and an available `web-access-main` CDP proxy. Check them using [SKILL.md](SKILL.md#capability-check-before-downloads); do not install a proxy or expose a debugging endpoint merely because this route exists. The two bundled `.mjs` helpers use this proxy and are not generic browser tools. Host-native routes may have different requirements.
 
 ## Installation
 
@@ -110,13 +105,12 @@ Use zju-literature-downloader to download these DOIs through my logged-in ZJU We
 
 The skill instructs the agent to:
 
-1. verify Chrome/WebVPN/remote-debugging prerequisites;
-2. search ZJU Summon by DOI or exact title;
-3. open the authorized PDF link in Chrome;
-4. download bytes from the authenticated browser page context;
-5. check supporting information links;
-6. verify each file as a readable PDF or document;
-7. record all results in a manifest.
+1. Check the host's supported browser control, access, saving, and verification capabilities independently; use the selected authorized session and destination.
+2. Search by DOI or exact title using the library or another legitimate source.
+3. Follow an authorized article/PDF route, with human authentication when needed.
+4. Save using a supported permitted route; page-context fetch is only an optional implementation.
+5. Inventory requested supporting information and verify each saved file's format and identity.
+6. Record separate main-PDF and SI states in the manifest; report control and transfer failures accurately.
 
 For ScienceDirect or other sensitive publisher platforms, keep the workflow slower and more manual:
 
@@ -195,9 +189,11 @@ $env:PYTHONUTF8='1'
 python -X utf8 "$env:USERPROFILE\.claude\skills\zju-literature-downloader\scripts\extract_pdf_text.py" --pdf "D:\papers\paper.pdf" --pages 3
 ```
 
-- Summon URLs often contain `#!`. If that nested URL is passed through another URL without encoding, the fragment can be stripped and Chrome may open `about:blank` or the wrong page. Prefer `scripts/cdp_open_url.mjs` for Summon and other fragment-heavy URLs.
+- Summon URLs often contain `#!`. Preserve the full URL; when using the CDP proxy, `scripts/cdp_open_url.mjs` encodes nested URLs correctly.
 
 ## Helper Scripts
+
+The following Windows examples are **only for the optional Chrome/web-access CDP proxy route**, after its prerequisites are met. Adjust the Node and skill paths to your installation. Other supported browser tools do not require these helpers.
 
 Open a Summon or publisher URL through the CDP proxy without losing `#!` fragments:
 
@@ -226,7 +222,7 @@ This is not automatically an access failure. Chrome's built-in PDF viewer can di
 
 1. Return to the publisher article landing page.
 2. Click its normal visible `Download PDF` or `View PDF` button once.
-3. Wait for the browser download to finish; do not use a `.crdownload` file.
+3. Configure the approved destination first and wait for the browser download to finish; do not silently use another folder or use a `.crdownload` file.
 4. Verify the candidate by `%PDF` signature, nonzero page count, and extracted title/DOI before copying it to `PDFs/`.
 5. Match recent downloads by modification time and content, not merely by filename: Chrome may add `(1)` to a duplicate filename.
 
@@ -261,10 +257,18 @@ id	title	doi	year	venue	status	pdf_path	si_status	si_paths	source_url	notes
 
 Keep the batch small and auditable. Stop when login, CAPTCHA, WebVPN expiry, publisher security checks, or suspicious download prompts appear.
 
+`downloaded` means the main PDF was saved and verified. `downloaded_with_si` additionally requires all known requested SI; track unknown SI completeness separately. A displayed PDF is not a completed download, and a DOI found only in a bibliography does not prove article identity.
+
 Useful statuses beyond `downloaded` and `downloaded_with_si`:
 
 ```text
 si_only_downloaded
+pdf_loading
+pdf_visible_unsaved
+saved_pending_verification
+identity_mismatch
+browser_control_unavailable
+host_execution_denied
 institutional_login_waiting_user
 summon_unreachable
 browser_pdf_viewer_fallback_needed
@@ -286,6 +290,8 @@ zju-literature-downloader/
 ├── SKILL.md
 ├── agents/
 │   └── openai.yaml
+├── references/
+│   └── browser-download-recovery.md
 ├── examples/
 │   ├── manifest-template.tsv
 │   ├── cas-retry-template.tsv
@@ -305,3 +311,4 @@ The workflow has been verified with:
 - Route: ZJU Summon `PDF` link -> ACS PDF page
 - Result: main PDF and ACS supporting information PDF
 - Verification: main PDF 17 pages, SI PDF 31 pages, both text-readable
+

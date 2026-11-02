@@ -2,7 +2,7 @@
 name: zju-literature-downloader
 description: Use this skill whenever the user wants to use their own logged-in Zhejiang University Library, WebVPN, CAS SSO, 求是学术搜索, Summon, ScienceDirect, publisher, or Chrome session to legally search, download, organize, retry, and read academic PDFs and supporting information. Trigger on requests like “用浙大图书馆下载文献”, “WebVPN 下载 PDF”, “CAS 认证失败后重试下载”, “ScienceDirect 人机验证后继续”, “自动下载补充材料”, “读取全文和 supporting information”, “批量整理文献到项目文件夹”, or “导入 Zotero 后帮我读全文”.
 metadata:
-  compatibility: Requires a local Chrome session logged in by the user, Chrome remote debugging permission, and a shell with Node.js 22+ or a bundled Node runtime. Uses only user-authorized access. Claude Code may need installation under .claude/skills.
+  compatibility: Requires legitimate access, a user-approved destination, and host-supported permitted browser control, saving and verification capabilities. The optional Chrome/CDP proxy route has additional dependencies. Claude Code may need installation under .claude/skills.
 ---
 
 # ZJU Literature Downloader
@@ -24,6 +24,8 @@ Do not inspect or export cookies, passwords, local storage, browser profiles, or
 ## Capability Check Before Downloads
 
 For a resumed batch, a stalled PDF, an unavailable control tool, or a `View PDF` redirect loop, first read [references/browser-download-recovery.md](references/browser-download-recovery.md). Establish current capabilities before requesting repeated user action.
+
+First check the selected surface independently for opening, inspecting/controlling the actual page, accessing/rendering the intended content, and saving and verifying it at the approved destination. An open request, listening port, or visible PDF does not prove later stages. If a capability is unavailable, report the observed limitation and use a supported human handoff when possible; do not infer a login failure or evade a host denial. Follow [the recovery guide](references/browser-download-recovery.md).
 
 The following describes the existing Chrome/CDP-proxy route, not universal prerequisites. Prefer the host's supported browser/download tools when they can use the user's authorized session and chosen destination. Do not install or expose a debugging endpoint just because this checklist mentions one.
 
@@ -106,9 +108,9 @@ Use `summon_unreachable` when the Summon SPA repeatedly returns `ERR_EMPTY_RESPO
 
 Use `publisher_verification_waiting_user` or `sciencedirect_robot_check` when a publisher page shows "Are you a robot?", CAPTCHA, Cloudflare, bot verification, or another anti-automation challenge. Do not treat this as a final failure, but do not try to solve it automatically.
 
-## Start Chrome Control
+## Optional: Start Chrome/CDP Proxy Control
 
-Use the web-access CDP proxy when available.
+Use this route only when selected after the host capability check. A supported host-native route does not require this proxy.
 
 On Windows PowerShell:
 
@@ -140,7 +142,7 @@ If this hangs or fails:
 - Read an existing proxy log if relevant, but put new logs and temporary output in the user's approved destination, not an unapproved default temporary directory.
 - Do not attempt to read Chrome session files or retry a host-denied operation through another interface.
 
-## Core CDP Proxy API
+## Optional: Core CDP Proxy API
 
 The usual web-access proxy is `http://127.0.0.1:3456`.
 
@@ -163,8 +165,8 @@ Prefer the library discovery route before direct publisher pages. It is more sta
 
 1. Search by DOI or exact title in ZJU Summon:
    - `https://zju.summon.serialssolutions.com/search?#!/search?pn=1&ho=t&include.ft.matches=f&l=en&q=<URL-encoded DOI or title>`
-2. Open Summon URLs through `scripts/cdp_open_url.mjs` or otherwise fully URL-encode the nested URL when calling the CDP proxy. Summon uses `#!`; if the `#` fragment is stripped, Chrome may open `about:blank` or the wrong page.
-3. Read the result page with `/eval`.
+2. Open the complete Summon URL with the supported browser tool. When using the CDP proxy, use `scripts/cdp_open_url.mjs` or fully encode the nested URL; a stripped `#!` fragment can open the wrong page.
+3. Inspect the result page using the supported browser tool (`/eval` is specific to the CDP proxy).
 4. Extract links whose visible text or `aria-label` is:
    - `PDF`
    - `在线全文`
@@ -172,9 +174,9 @@ Prefer the library discovery route before direct publisher pages. It is more sta
    - `View PDF`
    - publisher-specific full-text entries.
 5. Prefer the result's `PDF` link when present.
-6. Open the PDF link in a new background tab through the CDP proxy.
+6. Open the main article PDF using the supported browser route.
 7. If the publisher shows a security challenge, ask the user to complete it manually.
-8. Once the PDF is visible in Chrome, use `scripts/browser_pdf_downloader.mjs` to save it from the authenticated browser context.
+8. Save using a supported permitted download route and verify the result. The CDP helper is only one optional route; a visible PDF is not yet a saved, verified file.
 
 ### Summon Field Notes
 
@@ -389,7 +391,7 @@ When intervention is actually needed, identify the paper, current visible page t
 
 ## Download PDF From Browser Context
 
-Use the bundled script when a PDF URL opens in Chrome but direct shell download returns `403`, `401`, Cloudflare HTML, or a login page.
+When the optional Chrome/CDP proxy route is available, the bundled script may save an authorized PDF if a direct shell download returns `403`, `401`, Cloudflare HTML, or a login page. Prefer an already-supported host download route when appropriate; do not bypass access or verification.
 
 ```powershell
 $node = "$env:LOCALAPPDATA\OpenAI\Codex\bin\node.exe"
@@ -554,7 +556,7 @@ If direct publisher navigation triggers ScienceDirect "Are you a robot?", Cloudf
 
 If shell `Invoke-WebRequest` or `curl` returns 403 but the PDF opens in Chrome:
 
-- First use `browser_pdf_downloader.mjs` from an authenticated HTML/PDF page.
+- Use a supported authorized browser save route; on the optional CDP proxy route, `browser_pdf_downloader.mjs` may be used from an authenticated HTML/PDF page.
 - If the script reports a Chrome PDF-viewer fetch limitation, use the article page's visible `Download PDF` control and verify the browser download. Do not conclude that access failed from the helper error alone.
 
 If a page shows publisher bot verification, CAPTCHA, Cloudflare, QR login, SMS/OTP, or another security challenge:
@@ -581,7 +583,7 @@ If Summon shows no PDF:
 If Summon or another site opens as `about:blank`:
 
 - Treat it as a URL-fragment/encoding problem first, especially when the original URL contains `#!`.
-- Reopen through `scripts/cdp_open_url.mjs --url "<full URL>" --wait`.
+- Reopen the full URL with the supported browser tool; on the CDP route, `scripts/cdp_open_url.mjs --url "<full URL>" --wait` preserves the fragment.
 - Do not paste fragment-heavy URLs unquoted into shell commands or manually concatenate them into `/new?url=...` without URL encoding.
 
 If `curl` is unavailable:
@@ -628,3 +630,4 @@ Additional field-tested cases recorded from later use:
 - Nature Communications OA direct PDF: DOI pattern `10.1038/s41467-...`.
 - Springer direct PDF after CAS/institutional access: DOI pattern `10.1007/...`.
 - ScienceDirect / Elsevier: Shibboleth plus user-handled verification, then download from `pdf.sciencedirectassets.com` tabs.
+
